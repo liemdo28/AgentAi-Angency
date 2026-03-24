@@ -35,4 +35,9 @@ POLICIES: tuple[HandoffPolicy, ...] = (
     HandoffPolicy("data", "crm_automation", ("customer_segments", "behavior_events"), ("trigger_rules",), 12, "CRM Automation Lead"),
     HandoffPolicy("crm_automation", "media", ("retention_audience", "lifecycle_offer"), ("remarketing_brief",), 12, "Media Lead"),
     HandoffPolicy("crm_automation", "account", ("retention_performance", "churn_alert"), ("client_retention_update",), 12, "Account Manager"),
+    # Audit fixes: 4 missing routes
+    HandoffPolicy("crm_automation", "data", ("automation_performance", "campaign_trigger_log"), ("crm_effectiveness_report",), 12, "Data Lead"),
+    HandoffPolicy("strategy", "account", ("campaign_plan", "messaging_framework"), ("client_presentation_deck",), 8, "Account Manager"),
+    HandoffPolicy("media", "data", ("ad_spend_log", "platform_raw_data"), ("raw_media_dataset",), 6, "Data Lead"),
+    HandoffPolicy("production", "account", ("final_asset_delivery", "production_report"), ("client_delivery_package",), 8, "Account Manager"),
 )
