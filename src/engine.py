@@ -69,6 +69,14 @@ class WorkflowEngine:
         """Return all handoffs in a given state."""
         return [h for h in self._handoffs.values() if h.state == state]
 
+    def all_handoffs(self) -> list[HandoffInstance]:
+        """Return all handoffs regardless of state."""
+        return list(self._handoffs.values())
+
+    def restore(self, handoffs: dict[str, HandoffInstance]) -> None:
+        """Load persisted handoffs into the engine (replaces current state)."""
+        self._handoffs = dict(handoffs)
+
     def status(self) -> dict[str, int]:
         """Return count of handoffs per state."""
         counts: dict[str, int] = {s.value: 0 for s in HandoffState}
