@@ -15,7 +15,14 @@ class WorkflowEngine:
         }
         self._handoffs: list[HandoffInstance] = handoffs or []
 
-    def initiate_handoff(self, from_department: str, to_department: str, payload: dict[str, str]) -> HandoffInstance:
+    def initiate_handoff(
+        self,
+        from_department: str,
+        to_department: str,
+        payload: dict[str, str],
+        client_id: str | None = None,
+        project_id: str | None = None,
+    ) -> HandoffInstance:
         policy = self._policy_map.get((from_department, to_department))
         if not policy:
             raise ValueError(f"Unknown handoff route: {from_department}->{to_department}")
@@ -30,6 +37,8 @@ class WorkflowEngine:
             from_department=from_department,
             to_department=to_department,
             input_payload=payload,
+            client_id=client_id,
+            project_id=project_id,
             created_at=now,
             updated_at=now,
         )
@@ -72,6 +81,9 @@ class WorkflowEngine:
 
     def list_by_state(self, state: HandoffState) -> list[HandoffInstance]:
         return [h for h in self._handoffs if h.state == state]
+
+    def list_by_project(self, project_id: str) -> list[HandoffInstance]:
+        return [h for h in self._handoffs if h.project_id == project_id]
 
     def status_dashboard(self) -> dict[str, int]:
         total = len(self._handoffs)

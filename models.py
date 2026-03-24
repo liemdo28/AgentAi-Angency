@@ -37,6 +37,24 @@ class HandoffState(str, Enum):
 
 
 @dataclass
+class Client:
+    id: str
+    name: str
+    industry: str
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class Project:
+    id: str
+    client_id: str
+    name: str
+    objective: str
+    owner: str
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
 class HandoffInstance:
     id: str
     from_department: str
@@ -44,6 +62,8 @@ class HandoffInstance:
     input_payload: dict[str, str]
     state: HandoffState = HandoffState.DRAFT
     notes: str = ""
+    client_id: str | None = None
+    project_id: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
