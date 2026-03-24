@@ -58,6 +58,11 @@ def validate_policies() -> list[str]:
         ("creative", "production"),
         ("tech", "operations"),
         ("data", "crm_automation"),
+        # Audit additions
+        ("crm_automation", "data"),
+        ("strategy", "account"),
+        ("media", "data"),
+        ("production", "account"),
     }
 
     missing_routes = required_routes - route_seen
