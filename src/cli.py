@@ -72,7 +72,7 @@ def cmd_initiate(args) -> None:
     engine = _make_engine()
     try:
         h = engine.initiate(args.from_dept, args.to_dept, tuple(args.inputs))
-        store.save(engine._handoffs)
+        store.save(engine.export_handoffs())
         print(f"\n✓ Handoff created [{_colored_state(h.state.value)}]\n")
         _print_handoff(h)
     except (KeyError, ValueError) as e:
@@ -84,7 +84,7 @@ def cmd_approve(args) -> None:
     engine = _make_engine()
     try:
         h = engine.approve(args.id)
-        store.save(engine._handoffs)
+        store.save(engine.export_handoffs())
         print(f"\n✓ Handoff approved [{_colored_state(h.state.value)}]\n")
         _print_handoff(h)
     except (KeyError, ValueError) as e:
@@ -96,7 +96,7 @@ def cmd_block(args) -> None:
     engine = _make_engine()
     try:
         h = engine.block(args.id, reason=args.reason or "")
-        store.save(engine._handoffs)
+        store.save(engine.export_handoffs())
         print(f"\n✓ Handoff blocked [{_colored_state(h.state.value)}]\n")
         _print_handoff(h)
     except (KeyError, ValueError) as e:
@@ -142,7 +142,7 @@ def cmd_status(args) -> None:
 def cmd_refresh_overdue(args) -> None:
     engine = _make_engine()
     flagged = engine.refresh_overdue()
-    store.save(engine._handoffs)
+    store.save(engine.export_handoffs())
     if not flagged:
         print("\n  No handoffs past SLA deadline.\n")
     else:

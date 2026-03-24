@@ -87,7 +87,7 @@ def _handoff_response(h) -> dict:
 def initiate(req: InitiateRequest):
     try:
         h = engine.initiate(req.from_department, req.to_department, tuple(req.inputs))
-        store.save(engine._handoffs)
+        store.save(engine.export_handoffs())
         return _handoff_response(h)
     except KeyError as e:
         raise HTTPException(404, detail=str(e))
@@ -96,6 +96,7 @@ def initiate(req: InitiateRequest):
 
 
 @app.get("/handoffs", summary="List handoffs (optional ?state= filter)")
+
 def list_handoffs(state: Optional[str] = Query(None, description="draft|approved|blocked|overdue")):
     if state:
         try:
@@ -112,7 +113,7 @@ def list_handoffs(state: Optional[str] = Query(None, description="draft|approved
 @app.get("/handoffs/{handoff_id}", summary="Get a single handoff by ID")
 def get_handoff(handoff_id: str):
     try:
-        h = engine._get_handoff(handoff_id)
+        h = engine.get_handoff(handoff_id)
         return _handoff_response(h)
     except KeyError as e:
         raise HTTPException(404, detail=str(e))
@@ -122,7 +123,7 @@ def get_handoff(handoff_id: str):
 def approve(handoff_id: str):
     try:
         h = engine.approve(handoff_id)
-        store.save(engine._handoffs)
+        store.save(engine.export_handoffs())
         return _handoff_response(h)
     except KeyError as e:
         raise HTTPException(404, detail=str(e))
@@ -134,7 +135,7 @@ def approve(handoff_id: str):
 def block(handoff_id: str, req: BlockRequest = BlockRequest()):
     try:
         h = engine.block(handoff_id, req.reason)
-        store.save(engine._handoffs)
+        store.save(engine.export_handoffs())
         return _handoff_response(h)
     except KeyError as e:
         raise HTTPException(404, detail=str(e))
@@ -161,12 +162,12 @@ def status():
 def routes():
     return [
         {
-            "from": from_dept,
-            "to": to_dept,
-            "sla_hours": policy.sla_hours,
-            "approver_role": policy.approver_role,
-            "required_inputs": list(policy.required_inputs),
-            "expected_outputs": list(policy.expected_outputs),
+            "from": p.from_department,
+            "to": p.to_department,
+            "sla_hours": p.sla_hours,
+            "approver_role": p.approver_role,
+            "required_inputs": list(p.required_inputs),
+            "expected_outputs": list(p.expected_outputs),
         }
-        for (from_dept, to_dept), policy in engine._policies.items()
+        for p in engine.list_routes()
     ]

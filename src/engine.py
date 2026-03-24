@@ -84,6 +84,18 @@ class WorkflowEngine:
             counts[instance.state.value] += 1
         return counts
 
+    def get_handoff(self, handoff_id: str) -> HandoffInstance:
+        """Return a single handoff by ID (raises KeyError if not found)."""
+        return self._get_handoff(handoff_id)
+
+    def list_routes(self) -> list[HandoffPolicy]:
+        """Return all registered route policies."""
+        return list(self._policies.values())
+
+    def export_handoffs(self) -> dict[str, HandoffInstance]:
+        """Return a copy of the internal handoffs dict for persistence."""
+        return dict(self._handoffs)
+
     # ------------------------------------------------------------------ #
     # Helpers                                                              #
     # ------------------------------------------------------------------ #
