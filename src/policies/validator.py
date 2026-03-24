@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import policies.interdepartment_policies as _inter
 from agency_registry import load_all_departments
-from policies.interdepartment_policies import POLICIES
 
 
 def validate_policies() -> list[str]:
@@ -13,7 +13,7 @@ def validate_policies() -> list[str]:
     inbound: dict[str, int] = {key: 0 for key in department_keys}
     outbound: dict[str, int] = {key: 0 for key in department_keys}
 
-    for policy in POLICIES:
+    for policy in _inter.POLICIES:
         route = (policy.from_department, policy.to_department)
 
         if policy.from_department not in department_keys:
