@@ -17,12 +17,21 @@ Danh sách phòng ban:
 - sales
 - operations
 - finance
+- crm_automation
 
 ## Inter-department policies
 - File `src/policies/interdepartment_policies.py` chứa policy handoff giữa các phòng ban.
 - Mỗi policy có: from_department, to_department, required_inputs, expected_outputs, SLA, approver_role.
 
 ## Runtime validation
+Validator kiểm tra:
+- route hợp lệ
+- route trùng lặp
+- approver role đúng leader role
+- input/output không rỗng
+- critical routes bắt buộc
+- orphan departments
+
 Chạy:
 ```bash
 PYTHONPATH=. python src/main.py

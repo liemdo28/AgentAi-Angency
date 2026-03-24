@@ -2,13 +2,14 @@ POLICY = {
     "department": "sales",
     "leader_role": "Sales Lead",
     "core_outputs": [
-        "weekly_status",
-        "kpi_snapshot",
-        "handoff_package",
+        "qualified_lead",
+        "deal_summary",
+        "signed_contract",
+        "revenue_forecast",
     ],
     "required_inputs": [
-        "approved_brief",
-        "timeline",
-        "dependencies",
+        "pricing_policy",
+        "service_catalog",
+        "case_studies",
     ],
 }

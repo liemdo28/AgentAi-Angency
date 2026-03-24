@@ -2,13 +2,14 @@ POLICY = {
     "department": "strategy",
     "leader_role": "Strategy Lead",
     "core_outputs": [
-        "weekly_status",
-        "kpi_snapshot",
-        "handoff_package",
+        "strategy_direction",
+        "persona_matrix",
+        "funnel_blueprint",
+        "test_hypotheses",
     ],
     "required_inputs": [
-        "approved_brief",
-        "timeline",
-        "dependencies",
+        "client_brief_final",
+        "market_research_data",
+        "business_targets",
     ],
 }

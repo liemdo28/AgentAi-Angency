@@ -2,13 +2,14 @@ POLICY = {
     "department": "finance",
     "leader_role": "Finance Lead",
     "core_outputs": [
-        "weekly_status",
-        "kpi_snapshot",
-        "handoff_package",
+        "approved_budget",
+        "invoice_schedule",
+        "margin_report",
+        "discount_approval_decision",
     ],
     "required_inputs": [
-        "approved_brief",
-        "timeline",
-        "dependencies",
+        "deal_summary",
+        "campaign_spend_data",
+        "vendor_costs",
     ],
 }

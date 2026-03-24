@@ -2,13 +2,14 @@ POLICY = {
     "department": "data",
     "leader_role": "Data Lead",
     "core_outputs": [
-        "weekly_status",
-        "kpi_snapshot",
-        "handoff_package",
+        "dashboard_snapshot",
+        "attribution_report",
+        "anomaly_alert",
+        "insight_backlog",
     ],
     "required_inputs": [
-        "approved_brief",
-        "timeline",
-        "dependencies",
+        "tracking_implementation_log",
+        "order_data",
+        "spend_data",
     ],
 }

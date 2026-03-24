@@ -2,13 +2,14 @@ POLICY = {
     "department": "tech",
     "leader_role": "Tech Lead",
     "core_outputs": [
-        "weekly_status",
-        "kpi_snapshot",
-        "handoff_package",
+        "landing_page_release",
+        "tracking_implementation_log",
+        "integration_status",
+        "incident_report",
     ],
     "required_inputs": [
-        "approved_brief",
-        "timeline",
-        "dependencies",
+        "funnel_blueprint",
+        "api_requirements",
+        "qa_checklist",
     ],
 }

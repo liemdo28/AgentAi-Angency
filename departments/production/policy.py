@@ -2,13 +2,14 @@ POLICY = {
     "department": "production",
     "leader_role": "Production Lead",
     "core_outputs": [
-        "weekly_status",
-        "kpi_snapshot",
-        "handoff_package",
+        "raw_asset_pack",
+        "edited_master_files",
+        "subtitle_package",
+        "delivery_manifest",
     ],
     "required_inputs": [
-        "approved_brief",
-        "timeline",
-        "dependencies",
+        "creative_brief",
+        "shooting_plan",
+        "brand_guideline",
     ],
 }
