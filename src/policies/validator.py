@@ -21,6 +21,9 @@ def validate_policies() -> list[str]:
         if policy.to_department not in department_keys:
             errors.append(f"Unknown to_department: {policy.to_department}")
 
+        if policy.from_department == policy.to_department:
+            errors.append(f"Self route is not allowed: {policy.from_department}->{policy.to_department}")
+
         if route in route_seen:
             errors.append(f"Duplicate policy route: {policy.from_department}->{policy.to_department}")
         else:
@@ -79,5 +82,18 @@ def validate_policies() -> list[str]:
             errors.append(f"Department policy missing required_inputs: {dept}")
         if not bundle["policy"].get("core_outputs"):
             errors.append(f"Department policy missing core_outputs: {dept}")
+
+        policy_leader_role = bundle["policy"].get("leader_role")
+        leader_role = bundle["leader"].role
+        if policy_leader_role != leader_role:
+            errors.append(
+                f"Department policy leader mismatch: {dept} expects '{leader_role}' in policy, got '{policy_leader_role}'"
+            )
+
+        for employee in bundle["employees"]:
+            if employee.department != dept:
+                errors.append(
+                    f"Employee department mismatch: {employee.id} points to '{employee.department}', expected '{dept}'"
+                )
 
     return errors
