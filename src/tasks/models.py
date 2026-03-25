@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone, timezone
 from enum import Enum
 from typing import Any, Optional
 
@@ -37,11 +37,11 @@ def new_id() -> str:
 
 
 def now_iso() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def default_deadline(hours: int = 24) -> str:
-    return (datetime.utcnow() + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return (datetime.now(timezone.utc) + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @dataclass
@@ -112,7 +112,11 @@ class Task:
     def is_sla_breached(self) -> bool:
         if not self.sla_deadline:
             return False
-        return datetime.utcnow() > datetime.fromisoformat(self.sla_deadline.replace("Z", "+00:00"))
+        now_dt = datetime.now(timezone.utc)
+        deadline_dt = datetime.fromisoformat(self.sla_deadline.replace("Z", "+00:00"))
+        if deadline_dt.tzinfo is None:
+            deadline_dt = deadline_dt.replace(tzinfo=timezone.utc)
+        return now_dt > deadline_dt
 
     def kpi_score(self) -> float:
         if not self.kpis:

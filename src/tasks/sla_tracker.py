@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from src.tasks.models import Task
@@ -63,7 +63,9 @@ class SLATracker:
             logger.warning("SLATracker: invalid deadline format '%s' for task %s", deadline, task.id)
             return None
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
+        if deadline_dt.tzinfo is None:
+            deadline_dt = deadline_dt.replace(tzinfo=timezone.utc)
         if now <= deadline_dt:
             return None
 
@@ -96,7 +98,7 @@ class SLATracker:
                 current = current[:-1] + "+00:00"
             dt = datetime.fromisoformat(current)
         except ValueError:
-            dt = datetime.utcnow()
+            dt = datetime.now(timezone.utc)
         new_deadline = (dt + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
         task.sla_deadline = new_deadline
         self._repo.update(task)

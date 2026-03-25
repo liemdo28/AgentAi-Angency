@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from src.db.connection import get_db
@@ -36,7 +37,7 @@ class AccountRepository:
 
     def update(self, account_id: str, updates: dict[str, Any]) -> None:
         db = get_db()
-        updates["updated_at"] = __import__("datetime").datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        updates["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         setters = ", ".join(f"{k} = :{k}" for k in updates)
         db.execute(
             f"UPDATE {self.TABLE} SET {setters} WHERE id = :id",
@@ -126,7 +127,7 @@ class CampaignRepository:
 
     def update(self, campaign_id: str, updates: dict[str, Any]) -> None:
         db = get_db()
-        updates["updated_at"] = __import__("datetime").datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        updates["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         setters = ", ".join(f"{k} = :{k}" for k in updates)
         db.execute(
             f"UPDATE {self.TABLE} SET {setters} WHERE id = :id",

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from src.db.connection import get_db
@@ -42,7 +42,7 @@ class KPIStore:
                 "target": target,
                 "actual": actual,
                 "unit": unit,
-                "at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             },
         )
         db.commit()

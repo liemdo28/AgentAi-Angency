@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from datetime import datetime
+from datetime import datetime, timezone, timezone
 
 from models import (
     HandoffInstance,
@@ -68,7 +68,7 @@ class WorkflowEngine:
                     f"Only DRAFT and OVERDUE handoffs can be approved."
                 )
             instance.state = HandoffState.APPROVED
-            instance.updated_at = datetime.utcnow()
+            instance.updated_at = datetime.now(timezone.utc)
             return instance
 
     def block(self, handoff_id: str, reason: str = "") -> HandoffInstance:
@@ -90,7 +90,7 @@ class WorkflowEngine:
                 )
             instance.state = HandoffState.BLOCKED
             instance.notes = reason
-            instance.updated_at = datetime.utcnow()
+            instance.updated_at = datetime.now(timezone.utc)
             return instance
 
     def refresh_overdue(self, now: datetime | None = None) -> list[HandoffInstance]:
@@ -98,7 +98,9 @@ class WorkflowEngine:
 
         Returns the list of newly flagged handoffs.
         """
-        now = now or datetime.utcnow()
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
         flagged: list[HandoffInstance] = []
         with self._lock:
             for instance in self._handoffs.values():

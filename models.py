@@ -67,15 +67,18 @@ class HandoffInstance:
     provided_inputs: tuple[str, ...]
     state: HandoffState = HandoffState.DRAFT
     id: str = field(default_factory=lambda: str(uuid4()))
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     notes: str = ""
 
     def is_overdue(self, now: datetime | None = None) -> bool:
         if self.state == HandoffState.APPROVED:
             return False
         deadline = self.created_at + timedelta(hours=self.policy.sla_hours)
-        return (now or datetime.utcnow()) > deadline
+        now_dt = now or datetime.now(timezone.utc)
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.replace(tzinfo=timezone.utc)
+        return now_dt > deadline
 
 
 # ------------------------------------------------------------------ #

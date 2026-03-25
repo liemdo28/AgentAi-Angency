@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from src.db.connection import get_db, rows_to_dicts
@@ -94,7 +94,7 @@ class TaskRepository:
     def get_overdue(self) -> list[Task]:
         """Tasks whose SLA deadline has passed and are not done."""
         db = get_db()
-        now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         rows = db.execute(
             f"SELECT * FROM {self.TABLE} "
             f"WHERE sla_deadline IS NOT NULL "
@@ -121,7 +121,7 @@ class TaskRepository:
     def update_status(self, task_id: str, status: TaskStatus) -> None:
         """Quick status update."""
         db = get_db()
-        now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         updates = {"status": status.value}
         if status == TaskStatus.IN_PROGRESS:
             updates["started_at"] = now

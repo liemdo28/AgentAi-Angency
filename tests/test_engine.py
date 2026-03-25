@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone, timezone
 
 import pytest
 
@@ -122,7 +122,7 @@ def test_block_without_reason_leaves_empty_notes(engine, draft):
 # ------------------------------------------------------------------ #
 
 def test_refresh_overdue_marks_past_sla(engine, draft):
-    future = datetime.utcnow() + timedelta(hours=9)  # SLA is 8h
+    future = datetime.now(timezone.utc) + timedelta(hours=9)  # SLA is 8h
     flagged = engine.refresh_overdue(now=future)
     assert draft in flagged
     assert draft.state == HandoffState.OVERDUE
@@ -130,21 +130,21 @@ def test_refresh_overdue_marks_past_sla(engine, draft):
 
 def test_approved_not_marked_overdue(engine, draft):
     engine.approve(draft.id)
-    future = datetime.utcnow() + timedelta(hours=9)
+    future = datetime.now(timezone.utc) + timedelta(hours=9)
     flagged = engine.refresh_overdue(now=future)
     assert draft not in flagged
     assert draft.state == HandoffState.APPROVED
 
 
 def test_not_overdue_within_sla(engine, draft):
-    future = datetime.utcnow() + timedelta(hours=4)
+    future = datetime.now(timezone.utc) + timedelta(hours=4)
     flagged = engine.refresh_overdue(now=future)
     assert draft not in flagged
     assert draft.state == HandoffState.DRAFT
 
 
 def test_overdue_can_be_approved(engine, draft):
-    future = datetime.utcnow() + timedelta(hours=9)
+    future = datetime.now(timezone.utc) + timedelta(hours=9)
     engine.refresh_overdue(now=future)
     assert draft.state == HandoffState.OVERDUE
     engine.approve(draft.id)
@@ -153,7 +153,7 @@ def test_overdue_can_be_approved(engine, draft):
 
 def test_blocked_handoff_not_marked_overdue(engine, draft):
     engine.block(draft.id)
-    future = datetime.utcnow() + timedelta(hours=9)
+    future = datetime.now(timezone.utc) + timedelta(hours=9)
     flagged = engine.refresh_overdue(now=future)
     assert draft not in flagged
     assert draft.state == HandoffState.BLOCKED
