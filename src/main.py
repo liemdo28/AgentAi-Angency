@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ai.orchestrator import AutonomousAgency
 from agency_registry import load_all_departments
 from engine import WorkflowEngine
 from policies import POLICIES, validate_policies
@@ -19,9 +20,12 @@ def main() -> int:
 
     store = JsonStore()
     engine = WorkflowEngine(POLICIES, handoffs=store.load())
+    autonomous = AutonomousAgency(existing_tasks=store.load_tasks())
+
     print(f"Inter-department policies: {len(POLICIES)}")
     print(f"Persisted handoffs: {len(engine.list_handoffs())}")
-    print(f"Status: {engine.status_dashboard()}")
+    print(f"Workflow status: {engine.status_dashboard()}")
+    print(f"AI task status: {autonomous.status_dashboard()}")
 
     for dept, bundle in departments.items():
         print(f"- {dept}: leader={bundle['leader'].role}, employees={len(bundle['employees'])}")

@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from ai.orchestrator import AutonomousAgency
 from engine import WorkflowEngine
 from policies import POLICIES
 from store import JsonStore
@@ -10,6 +11,7 @@ from store import JsonStore
 app = FastAPI(title="Agency Workflow API")
 store = JsonStore()
 engine = WorkflowEngine(POLICIES, handoffs=store.load())
+autonomous = AutonomousAgency(existing_tasks=store.load_tasks())
 
 
 class InitiateRequest(BaseModel):
@@ -20,6 +22,14 @@ class InitiateRequest(BaseModel):
 
 class ActionRequest(BaseModel):
     notes: str = ""
+
+
+class CreateTaskRequest(BaseModel):
+    department: str
+    goal: str
+    kpi: str
+    deadline: str
+    context: dict[str, str] = Field(default_factory=dict)
 
 
 @app.post("/handoffs")
@@ -88,3 +98,49 @@ def status():
 @app.get("/routes")
 def routes():
     return engine.list_routes()
+
+
+@app.post("/ai/tasks")
+def create_ai_task(req: CreateTaskRequest):
+    try:
+        task = autonomous.create_task(
+            goal=req.goal,
+            kpi=req.kpi,
+            deadline=req.deadline,
+            department=req.department,
+            context=req.context,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    store.save_tasks(autonomous.list_tasks())
+    return {"id": task.id, "status": task.status.value}
+
+
+@app.post("/ai/tasks/{task_id}/run")
+def run_ai_task(task_id: str):
+    try:
+        task = autonomous.run_task(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    store.save_tasks(autonomous.list_tasks())
+    return {"id": task.id, "status": task.status.value, "score": task.score}
+
+
+@app.get("/ai/tasks")
+def list_ai_tasks():
+    return [
+        {
+            "id": task.id,
+            "department": task.department,
+            "goal": task.goal,
+            "kpi": task.kpi,
+            "status": task.status.value,
+            "score": task.score,
+        }
+        for task in autonomous.list_tasks()
+    ]
+
+
+@app.get("/ai/status")
+def ai_status():
+    return autonomous.status_dashboard()

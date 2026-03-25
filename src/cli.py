@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 
+from ai.orchestrator import AutonomousAgency
 from engine import WorkflowEngine
 from policies import POLICIES
 from store import JsonStore
@@ -34,9 +35,23 @@ def main() -> int:
     sub.add_parser("routes")
     sub.add_parser("refresh-overdue")
 
+    # Autonomous AI layer commands
+    p_ai_task = sub.add_parser("ai-create-task")
+    p_ai_task.add_argument("department")
+    p_ai_task.add_argument("goal")
+    p_ai_task.add_argument("kpi")
+    p_ai_task.add_argument("deadline")
+    p_ai_task.add_argument("--context", default="{}")
+
+    p_ai_run = sub.add_parser("ai-run-task")
+    p_ai_run.add_argument("task_id")
+
+    sub.add_parser("ai-status")
+
     args = parser.parse_args()
     store = JsonStore()
     engine = build_engine(store)
+    autonomous = AutonomousAgency(existing_tasks=store.load_tasks())
 
     if args.cmd == "initiate":
         payload = json.loads(args.payload)
@@ -64,7 +79,25 @@ def main() -> int:
         changed = engine.refresh_overdue()
         print(json.dumps({"updated": changed}))
 
+    elif args.cmd == "ai-create-task":
+        task = autonomous.create_task(
+            goal=args.goal,
+            kpi=args.kpi,
+            deadline=args.deadline,
+            department=args.department,
+            context=json.loads(args.context),
+        )
+        print(task.id)
+
+    elif args.cmd == "ai-run-task":
+        task = autonomous.run_task(args.task_id)
+        print(json.dumps({"id": task.id, "status": task.status.value, "score": task.score}, indent=2))
+
+    elif args.cmd == "ai-status":
+        print(json.dumps(autonomous.status_dashboard(), indent=2))
+
     store.save(engine.list_handoffs())
+    store.save_tasks(autonomous.list_tasks())
     return 0
 
 
