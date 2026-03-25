@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import policies.interdepartment_policies as _inter_mod
 
-from agency_registry import load_all_departments
+from src.agency_registry import load_all_departments
 
 
 def validate_policies() -> list[str]:
