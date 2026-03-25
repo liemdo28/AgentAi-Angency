@@ -286,17 +286,87 @@ Evaluate the specialist output using the rubric and return ONLY JSON.
                 reason=str(llm_exc),
             )
 
-    # Decision
-    if score >= score_threshold:
-        next_action = "passed"
-        status = "PASSED"
-    elif retry_count >= MAX_RETRIES:
-        logger.warning("Max retries (%s) exceeded - escalating to human", MAX_RETRIES)
-        next_action = "escalate"
-        status = "FAILED"
-    else:
-        next_action = "failed"
-        status = "REVIEW_FAILED"
+    # Decision (prefer RetryWithFeedback engine when task record exists)
+    task_id = state.get("task_id", "")
+    decision_reason = ""
+    retry_feedback = ""
+
+    next_action = "failed"
+    status = "REVIEW_FAILED"
+
+    try:
+        if task_id:
+            from src.db.repositories.task_repo import TaskRepository
+            from src.scoring.retry_with_feedback import RetryWithFeedback
+
+            repo = TaskRepository()
+            task = repo.get(task_id)
+            if task is not None:
+                # Sync latest graph values to the task snapshot used for decisioning
+                task.retry_count = retry_count
+                task.score = score
+
+                retry_engine = RetryWithFeedback(task_repo=repo)
+                retry_decision = retry_engine.decide(
+                    task=task,
+                    department=to_department,
+                    output=specialist_output,
+                    existing_score=score,
+                )
+                decision_reason = retry_decision.reason
+                retry_feedback = retry_decision.feedback or ""
+
+                if retry_decision.final_decision == "accept":
+                    next_action = "passed"
+                    status = "PASSED"
+                elif retry_decision.final_decision == "retry":
+                    next_action = "failed"
+                    status = "REVIEW_FAILED"
+                else:
+                    next_action = "escalate"
+                    status = "FAILED"
+            else:
+                raise ValueError(f"Task not found for retry decision: {task_id}")
+        else:
+            raise ValueError("No task_id in state")
+    except Exception as decision_exc:
+        logger.warning("RetryWithFeedback decision unavailable, fallback to legacy logic: %s", decision_exc)
+        if score >= score_threshold:
+            next_action = "passed"
+            status = "PASSED"
+            decision_reason = f"Score {score:.1f} >= threshold {score_threshold:.1f}"
+        elif retry_count >= MAX_RETRIES:
+            logger.warning("Max retries (%s) exceeded - escalating to human", MAX_RETRIES)
+            next_action = "escalate"
+            status = "FAILED"
+            decision_reason = f"Max retries reached ({retry_count})"
+        else:
+            next_action = "failed"
+            status = "REVIEW_FAILED"
+            decision_reason = f"Score {score:.1f} < threshold {score_threshold:.1f}; retrying"
+
+    # If retry engine produced structured feedback and LLM feedback is empty, use it
+    if (not feedback) and retry_feedback:
+        feedback = retry_feedback
+
+    # EscalationTrigger integration
+    if next_action == "escalate" and task_id:
+        try:
+            from src.db.repositories.task_repo import TaskRepository
+            from src.scoring.escalation_trigger import EscalationTrigger
+
+            repo = TaskRepository()
+            task = repo.get(task_id)
+            if task is not None:
+                esc = EscalationTrigger(task_repo=repo)
+                esc.trigger(
+                    task=task,
+                    reason=feedback or decision_reason or f"Score {score:.1f} below acceptable threshold",
+                    escalation_type="low_quality" if score < score_threshold else "max_retries",
+                    notes=f"department={to_department}; retry_count={retry_count}; method={scoring_method}",
+                )
+        except Exception as esc_exc:
+            logger.warning("Escalation trigger failed for task %s: %s", task_id, esc_exc)
 
     return {
         **state,
@@ -313,6 +383,7 @@ Evaluate the specialist output using the rubric and return ONLY JSON.
                 "decision": "PASS" if next_action == "passed" else "FAIL",
                 "retry_count": retry_count,
                 "scoring_method": scoring_method,
+                "decision_reason": decision_reason,
             },
         ],
         "status": status,

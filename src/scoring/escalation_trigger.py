@@ -201,20 +201,30 @@ class EscalationTrigger:
 
     def get_pending_escalations(self) -> list[EscalationRecord]:
         """Get all pending escalation records from the audit log."""
+        import json
+
         rows = self._repo.get_pending_escalations()
-        return [
-            EscalationRecord(
-                task_id=r["entity_id"],
-                reason=r["details"].get("reason", ""),
-                score=r["details"].get("score", 0.0),
-                retry_count=r["details"].get("retry_count", 0),
-                escalation_type=r["action_type"].replace("escalation_", ""),
-                assigned_to=r["details"].get("assigned_to", ""),
-                status=r["details"].get("status", "pending"),
-                created_at=r["created_at"],
+        records: list[EscalationRecord] = []
+        for r in rows:
+            details_raw = r.get("details_json", "{}")
+            try:
+                details = json.loads(details_raw) if isinstance(details_raw, str) else (details_raw or {})
+            except Exception:
+                details = {}
+
+            records.append(
+                EscalationRecord(
+                    task_id=r.get("entity_id", ""),
+                    reason=details.get("reason", ""),
+                    score=float(details.get("score", 0.0) or 0.0),
+                    retry_count=int(details.get("retry_count", 0) or 0),
+                    escalation_type=r.get("action_type", "").replace("escalation_", ""),
+                    assigned_to=details.get("assigned_to", ""),
+                    status=details.get("status", "pending"),
+                    created_at=r.get("timestamp", ""),
+                )
             )
-            for r in rows
-        ]
+        return records
 
     def acknowledge(self, task_id: str) -> None:
         """Mark an escalation as acknowledged by human."""
