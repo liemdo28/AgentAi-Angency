@@ -6,13 +6,13 @@ Also includes a data collection email workflow: agency sends report requests →
 ## Setup
 
 ```bash
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 ```
 
 ## Run tests
 
 ```bash
-PYTHONPATH=.:src pytest tests/ -v
+PYTHONPATH=.:src python3 -m pytest tests/ -v
 ```
 
 ---
@@ -21,22 +21,22 @@ PYTHONPATH=.:src pytest tests/ -v
 
 ```bash
 # Create a handoff from Sales to Account
-python src/cli.py initiate --from sales --to account \
+python3 src/cli.py initiate --from sales --to account \
   --inputs lead_profile deal_status target_kpi
 
 # Approve / block by ID
-python src/cli.py approve --id <uuid>
-python src/cli.py block  --id <uuid> --reason "Client unresponsive"
+python3 src/cli.py approve --id <uuid>
+python3 src/cli.py block  --id <uuid> --reason "Client unresponsive"
 
 # Dashboard
-python src/cli.py status
+python3 src/cli.py status
 
 # List all, or filter by state
-python src/cli.py list
-python src/cli.py list --state draft
+python3 src/cli.py list
+python3 src/cli.py list --state draft
 
 # Scan for overdue handoffs (past SLA)
-python src/cli.py refresh-overdue
+python3 src/cli.py refresh-overdue
 ```
 
 Handoff state is persisted to `agency_state.json` in the working directory.
@@ -46,7 +46,7 @@ Handoff state is persisted to `agency_state.json` in the working directory.
 ## REST API
 
 ```bash
-PYTHONPATH=.:src uvicorn api:app --app-dir src --reload
+PYTHONPATH=.:src python3 -m uvicorn api:app --app-dir src --reload
 ```
 
 Interactive docs: http://localhost:8000/docs

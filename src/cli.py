@@ -3,13 +3,13 @@
 AgentAI Agency — Command Line Interface
 
 Usage examples:
-  python src/cli.py initiate --from sales --to account --inputs lead_profile deal_status target_kpi
-  python src/cli.py approve --id <uuid>
-  python src/cli.py block  --id <uuid> --reason "Client unresponsive"
-  python src/cli.py list
-  python src/cli.py list --state draft
-  python src/cli.py status
-  python src/cli.py refresh-overdue
+  python3 src/cli.py initiate --from sales --to account --inputs lead_profile deal_status target_kpi
+  python3 src/cli.py approve --id <uuid>
+  python3 src/cli.py block  --id <uuid> --reason "Client unresponsive"
+  python3 src/cli.py list
+  python3 src/cli.py list --state draft
+  python3 src/cli.py status
+  python3 src/cli.py refresh-overdue
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ import argparse
 import sys
 from pathlib import Path
 
-# Allow running from project root: python src/cli.py
+# Allow running from project root: python3 src/cli.py
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent))
 

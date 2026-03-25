@@ -22,6 +22,8 @@ Thumbs.db
 
 # Storage
 storage/
+data/
+agency_state.json
 
 # LangGraph checkpoint (if used)
 .checkpoints/

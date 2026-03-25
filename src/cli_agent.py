@@ -1,14 +1,14 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
 Agency AI CLI - command-line interface for planning and running agency tasks.
 
 Usage:
-    python src/cli_agent.py plan --task "Launch a spring real-estate campaign"
-    python src/cli_agent.py run --task "Tao strategy direction cho campaign bat dong san"
-    python src/cli_agent.py exec --goal "Chay campaign quang cao Nike cho san pham giay the thao"
-    python src/cli_agent.py monitor
-    python src/cli_agent.py status
-    python src/cli_agent.py routes
+    python3 src/cli_agent.py plan --task "Launch a spring real-estate campaign"
+    python3 src/cli_agent.py run --task "Tao strategy direction cho campaign bat dong san"
+    python3 src/cli_agent.py exec --goal "Chay campaign quang cao Nike cho san pham giay the thao"
+    python3 src/cli_agent.py monitor
+    python3 src/cli_agent.py status
+    python3 src/cli_agent.py routes
 """
 from __future__ import annotations
 
