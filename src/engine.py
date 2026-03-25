@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from datetime import datetime, timezone, timezone
+from datetime import datetime, timezone
 
 from models import (
     HandoffInstance,

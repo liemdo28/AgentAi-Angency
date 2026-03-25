@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta, timezone, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Optional
 
@@ -184,10 +184,10 @@ class Task:
             score=float(row.get("score", 0.0)),
             kpis=_parse_json(row.get("kpis_json"), {}),
             kpi_results=_parse_json(row.get("kpi_results_json"), {}),
-            deadline=str(row.get("deadline") or ""),
-            sla_deadline=str(row.get("sla_deadline") or ""),
-            started_at=str(row.get("started_at") or ""),
-            completed_at=str(row.get("completed_at") or ""),
+            deadline=row.get("deadline") or None,
+            sla_deadline=row.get("sla_deadline") or None,
+            started_at=row.get("started_at") or None,
+            completed_at=row.get("completed_at") or None,
             current_department=str(row.get("current_department") or ""),
             planning_mode=str(row.get("planning_mode", "template")),
             health_flags=_parse_json(row.get("health_flags_json"), []),

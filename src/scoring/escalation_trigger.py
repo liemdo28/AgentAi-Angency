@@ -188,11 +188,12 @@ class EscalationTrigger:
         if not task.sla_deadline:
             return 0.0
         try:
-            from datetime import datetime as dt, timedelta
+            from datetime import datetime as dt
             deadline = dt.fromisoformat(task.sla_deadline)
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=timezone.utc)
             now = datetime.now(timezone.utc)
-            # Approximate local time
-            delta = now - deadline.replace(tzinfo=None)
+            delta = now - deadline
             return delta.total_seconds() / 3600
         except Exception:
             return 0.0

@@ -353,7 +353,6 @@ def _task_to_out(task) -> TaskOut:
 @app.post("/tasks", status_code=201, response_model=TaskOut,
           summary="Create a new AI task")
 def create_task(req: CreateTaskRequest):
-    import sqlite3
     try:
         from src.db.connection import init_db
         from src.db.repositories.task_repo import TaskRepository

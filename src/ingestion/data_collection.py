@@ -44,7 +44,9 @@ def _save_attachment(
     part: Any, storage_dir: str, account_id: str, report_date: str
 ) -> str:
     """Save a MIME attachment to local storage; return file path."""
-    filename = part.get_filename() or "attachment"
+    raw_name = part.get_filename() or "attachment"
+    # Strip any path components to prevent directory traversal
+    filename = os.path.basename(raw_name) or "attachment"
     safe_date = report_date.replace(":", "-").replace(" ", "_")
     dest_dir = os.path.join(storage_dir, account_id, safe_date)
     os.makedirs(dest_dir, exist_ok=True)
