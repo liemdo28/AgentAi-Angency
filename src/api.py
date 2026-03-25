@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import json
 import logging
+import sqlite3
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
@@ -352,6 +353,7 @@ def _task_to_out(task) -> TaskOut:
 @app.post("/tasks", status_code=201, response_model=TaskOut,
           summary="Create a new AI task")
 def create_task(req: CreateTaskRequest):
+    import sqlite3
     try:
         from src.db.connection import init_db
         from src.db.repositories.task_repo import TaskRepository
@@ -372,8 +374,19 @@ def create_task(req: CreateTaskRequest):
         )
         repo.create(task)
         return _task_to_out(task)
+    except ValueError as exc:
+        # Invalid enum value (bad priority) or model validation failure
+        raise HTTPException(400, detail=f"Invalid task parameter: {exc}")
+    except sqlite3.IntegrityError as exc:
+        # Duplicate task ID
+        raise HTTPException(409, detail=f"Task already exists: {exc}")
+    except sqlite3.OperationalError as exc:
+        # DB connection / table not found
+        logger.error("Database operational error: %s", exc)
+        raise HTTPException(503, detail="Database unavailable. Please retry shortly.")
     except Exception as exc:
-        raise HTTPException(500, detail=str(exc))
+        logger.exception("create_task failed: %s", exc)
+        raise HTTPException(500, detail=f"Unexpected error creating task: {exc}")
 
 
 @app.get("/tasks", response_model=TaskListOut,
@@ -400,8 +413,14 @@ def list_tasks(
             items = [t for t in items if t.account_id == account_id]
 
         return TaskListOut(total=len(items), items=[_task_to_out(t) for t in items])
+    except ValueError as exc:
+        raise HTTPException(400, detail=f"Invalid list filter: {exc}")
+    except sqlite3.OperationalError as exc:
+        logger.error("Database error in list_tasks: %s", exc)
+        raise HTTPException(503, detail="Database unavailable.")
     except Exception as exc:
-        raise HTTPException(500, detail=str(exc))
+        logger.exception("list_tasks failed: %s", exc)
+        raise HTTPException(500, detail="Unexpected error listing tasks.")
 
 
 @app.get("/tasks/{task_id}", response_model=TaskOut,
@@ -419,8 +438,14 @@ def get_task(task_id: str):
         return _task_to_out(task)
     except HTTPException:
         raise
+    except ValueError as exc:
+        raise HTTPException(400, detail=f"Invalid task data: {exc}")
+    except sqlite3.OperationalError as exc:
+        logger.error("Database error in get_task: %s", exc)
+        raise HTTPException(503, detail="Database unavailable.")
     except Exception as exc:
-        raise HTTPException(500, detail=str(exc))
+        logger.exception("get_task failed: %s", exc)
+        raise HTTPException(500, detail="Unexpected error fetching task.")
 
 
 @app.post("/tasks/{task_id}/run", response_model=RunTaskResult,
@@ -448,8 +473,18 @@ def run_task(task_id: str):
         )
     except HTTPException:
         raise
+    except ValueError as exc:
+        raise HTTPException(400, detail=f"Invalid task or parameter: {exc}")
+    except RuntimeError as exc:
+        # Raised by task_runner / graph when LLM chain fails end-to-end
+        logger.error("Task execution RuntimeError: %s", exc)
+        raise HTTPException(422, detail=f"Task execution failed: {exc}")
+    except sqlite3.OperationalError as exc:
+        logger.error("Database error in run_task: %s", exc)
+        raise HTTPException(503, detail="Database unavailable.")
     except Exception as exc:
-        raise HTTPException(500, detail=str(exc))
+        logger.exception("run_task failed: %s", exc)
+        raise HTTPException(500, detail=f"Unexpected error running task: {exc}")
 
 
 @app.get("/tasks/{task_id}/review-history",
@@ -473,8 +508,14 @@ def get_review_history(task_id: str):
                 r["breakdown"] = {}
             history.append(r)
         return {"task_id": task_id, "history": history}
+    except ValueError as exc:
+        raise HTTPException(400, detail=f"Invalid filter: {exc}")
+    except sqlite3.OperationalError as exc:
+        logger.error("Database error in get_review_history: %s", exc)
+        raise HTTPException(503, detail="Database unavailable.")
     except Exception as exc:
-        raise HTTPException(500, detail=str(exc))
+        logger.exception("get_review_history failed: %s", exc)
+        raise HTTPException(500, detail="Unexpected error fetching review history.")
 
 
 @app.post("/tasks/{task_id}/cancel",
@@ -496,8 +537,14 @@ def cancel_task(task_id: str):
         return {"task_id": task_id, "status": "cancelled"}
     except HTTPException:
         raise
+    except ValueError as exc:
+        raise HTTPException(400, detail=f"Invalid task state: {exc}")
+    except sqlite3.OperationalError as exc:
+        logger.error("Database error in cancel_task: %s", exc)
+        raise HTTPException(503, detail="Database unavailable.")
     except Exception as exc:
-        raise HTTPException(500, detail=str(exc))
+        logger.exception("cancel_task failed: %s", exc)
+        raise HTTPException(500, detail="Unexpected error cancelling task.")
 
 
 # ================================================================== #
@@ -542,8 +589,11 @@ def data_collection_request(req: DataRequestBody):
         return result
     except HTTPException:
         raise
+    except ValueError as exc:
+        raise HTTPException(400, detail=f"Invalid email parameter: {exc}")
     except Exception as exc:
-        raise HTTPException(500, detail=str(exc))
+        logger.exception("data_collection_request failed: %s", exc)
+        raise HTTPException(500, detail=f"Unexpected error sending data request: {exc}")
 
 
 @app.post("/data-collection/inbound",
@@ -572,5 +622,8 @@ def data_collection_inbound(req: InboundEmailBody):
         return result
     except HTTPException:
         raise
+    except ValueError as exc:
+        raise HTTPException(400, detail=f"Invalid inbound email parameter: {exc}")
     except Exception as exc:
-        raise HTTPException(500, detail=str(exc))
+        logger.exception("data_collection_inbound failed: %s", exc)
+        raise HTTPException(500, detail=f"Unexpected error processing inbound email: {exc}")

@@ -72,7 +72,12 @@ def _heuristic_review(
     to_department: str,
     reason: str,
 ) -> AgenticState:
-    """Fallback scoring when LLM is unavailable — uses structural heuristics."""
+    """
+    Fallback scoring when LLM is unavailable — uses rubric-aligned structural heuristics.
+    Now loads actual rubric weights from rubric_registry so scoring is department-specific.
+    """
+    from src.scoring.rubric_registry import get_rubric
+
     specialist_output = state.get("specialist_output", "")
     specialist_text = specialist_output.lower()
     coverage_hits = 0
@@ -83,6 +88,21 @@ def _heuristic_review(
     coverage_ratio = coverage_hits / max(len(expected_outputs), 1)
     line_count = len(specialist_output.splitlines())
     structured_sections = specialist_output.count("## ")
+    word_count = len(specialist_output.split())
+    has_tables = "|" in specialist_output or "||" in specialist_output
+
+    # Load rubric to get per-department weights (fallback weights if unavailable)
+    rubric_weights: dict[str, float] = {
+        "completeness": 0.25,
+        "accuracy": 0.30,
+        "actionability": 0.30,
+        "professional_quality": 0.15,
+    }
+    try:
+        rubric = get_rubric(to_department)
+        rubric_weights = {c.name: c.weight for c in rubric.criteria}
+    except Exception:
+        pass  # use fallback weights above
 
     if coverage_ratio >= 1.0 and structured_sections >= max(len(expected_outputs), 1):
         completeness = 97.0
@@ -91,24 +111,38 @@ def _heuristic_review(
         professional_quality = 95.0 if line_count >= 6 else 91.0
     else:
         completeness = min(100.0, 55.0 + (coverage_ratio * 45.0))
-        actionability = min(100.0, 65.0 + min(len(specialist_output), 3000) / 100.0)
+        actionability = min(100.0, 65.0 + min(word_count, 3000) / 100.0)
         accuracy = 80.0 if specialist_output.strip() else 0.0
         professional_quality = 78.0 if line_count >= 4 else 60.0
 
+    # Use rubric-specific weights (not hardcoded)
     score = round(
-        (completeness * 0.30)
-        + (accuracy * 0.30)
-        + (actionability * 0.25)
-        + (professional_quality * 0.15),
+        (completeness * rubric_weights.get("completeness", 0.25))
+        + (accuracy * rubric_weights.get("accuracy", 0.30))
+        + (actionability * rubric_weights.get("actionability", 0.30))
+        + (professional_quality * rubric_weights.get("professional_quality", 0.15)),
         2,
     )
     decision = "PASS" if score >= score_threshold else "FAIL"
     next_action = "passed" if decision == "PASS" else ("failed" if retry_count < MAX_RETRIES else "escalate")
     status = "PASSED" if decision == "PASS" else ("REVIEW_FAILED" if next_action == "failed" else "FAILED")
-    feedback = "" if decision == "PASS" else (
-        "Raise coverage for the expected outputs, make the deliverable more concrete, "
-        "and address missing sections before retry."
-    )
+
+    # Department-specific feedback tied to rubric criteria
+    feedback_map = {
+        "strategy": "Missing strategic rationale, SWOT depth, or competitive context. "
+                     "Expand the analysis and tie recommendations to market evidence.",
+        "creative": "Creative output needs more specific headlines, body copy variants, "
+                     "or visual direction. Add concrete details — not generic advice.",
+        "data": "Add specific KPI figures, trend analysis, and actionable recommendations. "
+                "Include audience breakdown and channel performance data.",
+        "media": "Media plan needs channel rationale, budget split justification, "
+                 "and measurable KPIs per channel.",
+        "account": "Client deliverable needs clearer scope definition, risk assessment, "
+                   "and specific milestones.",
+        "default": "Raise coverage for the expected outputs, make the deliverable more concrete, "
+                   "and address all required sections before retry.",
+    }
+    feedback = "" if decision == "PASS" else feedback_map.get(to_department, feedback_map["default"])
 
     return {
         **state,
@@ -130,6 +164,8 @@ def _heuristic_review(
                 "decision": decision,
                 "retry_count": retry_count,
                 "mode": "heuristic",
+                "rubric_department": to_department,
+                "rubric_weights": rubric_weights,
             },
         ],
         "status": status,
