@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from uuid import uuid4
 
@@ -76,6 +76,28 @@ class HandoffInstance:
             return False
         deadline = self.created_at + timedelta(hours=self.policy.sla_hours)
         return (now or datetime.utcnow()) > deadline
+
+
+# ------------------------------------------------------------------ #
+# Client / Project (SaaS layer)                                        #
+# ------------------------------------------------------------------ #
+
+@dataclass
+class Client:
+    id: str
+    name: str
+    industry: str
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class Project:
+    id: str
+    client_id: str
+    name: str
+    objective: str
+    owner: str
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # ------------------------------------------------------------------ #
