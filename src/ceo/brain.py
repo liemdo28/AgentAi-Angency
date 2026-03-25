@@ -118,8 +118,9 @@ class CEOBrain:
                 task_id=task.id,
                 task_type=task.task_type,
             )
-            # Update task status from result
-            task.status = TaskStatus(result.get("status", "draft"))
+            # Update task status from result (map uppercase graph statuses to lowercase)
+            raw_status = result.get("status", "draft").lower()
+            task.status = TaskStatus(raw_status)
             task.score = float(result.get("leader_score", 0))
             task.final_output_text = result.get("specialist_output", "")
             self._task_repo.update(task)

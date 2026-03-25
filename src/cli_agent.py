@@ -5,6 +5,8 @@ Agency AI CLI - command-line interface for planning and running agency tasks.
 Usage:
     python src/cli_agent.py plan --task "Launch a spring real-estate campaign"
     python src/cli_agent.py run --task "Tao strategy direction cho campaign bat dong san"
+    python src/cli_agent.py exec --goal "Chay campaign quang cao Nike cho san pham giay the thao"
+    python src/cli_agent.py monitor
     python src/cli_agent.py status
     python src/cli_agent.py routes
 """
@@ -18,10 +20,16 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Fix Windows cp1252 encoding for Vietnamese output
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 from src.agency_registry import load_all_departments
 from src.agents.supervisor import AgencySupervisor
 from src.policies.interdepartment_policies import POLICIES
-from src.tasks import build_task_plan, list_available_task_types
+from src.task_templates import build_task_plan, list_available_task_types
 
 logging.basicConfig(
     level=logging.INFO,
@@ -161,6 +169,155 @@ def cmd_routes(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_exec(args: argparse.Namespace) -> int:
+    """
+    CEO Exec: operator gives a goal, AI does the work end-to-end.
+
+    This is the primary command for running the AI Agency.
+    Uses CEO Brain (Layer 1) to interpret the goal, create a Task,
+    execute the LangGraph workflow, score it, and retry if needed.
+    """
+    from src.agents.supervisor import AgencySupervisor
+    from src.ceo.brain import CEOBrain
+
+    goal = args.goal
+    mode = args.mode.upper() if args.mode else "CREATE_TASK"
+
+    print(f"\n{'=' * 60}")
+    print("  CEO EXEC - AI Doing The Work")
+    print(f"{'=' * 60}")
+    print(f"  Goal:  {goal}")
+    print(f"  Mode:  {mode}")
+    print(f"{'=' * 60}\n")
+
+    try:
+        ceo = CEOBrain()
+        result = ceo.run(goal, mode=mode)
+    except Exception as exc:
+        # Fallback: direct supervisor run (if DB not init yet)
+        print(f"  [Note] CEOBrain init failed ({exc}), falling back to direct run...\n")
+        supervisor = AgencySupervisor()
+        result = supervisor.run(task_description=goal)
+
+    # ── Parse result ────────────────────────────────────────────────
+    action = result.get("action", "unknown")
+    task_id = result.get("task_id", "?")
+    status = result.get("status", "?")
+    score = result.get("score", result.get("leader_score", 0))
+    decisions = result.get("decisions", [])
+    sla_violations = result.get("sla_violations", [])
+    campaign_health = result.get("campaign_health", {})
+    active_tasks = result.get("active_tasks", 0)
+
+    print(f"\n{'=' * 60}")
+    print("  CEO RESULT")
+    print(f"{'=' * 60}")
+    print(f"  Action:   {action}")
+    if task_id != "?":
+        print(f"  Task ID:  {task_id}")
+    print(f"  Status:   {status}")
+    print(f"  Score:    {score:.0f}/100")
+
+    # ── MONITOR mode output ─────────────────────────────────────────
+    if mode == "MONITOR":
+        print(f"\n  --- Monitoring Summary ---")
+        print(f"  Active tasks:       {active_tasks}")
+        print(f"  SLA violations:     {len(sla_violations)}")
+        print(f"  Health scores:      {len(campaign_health)} campaigns")
+        for cid, hscore in list(campaign_health.items())[:5]:
+            bar = "=" * int(hscore / 10)
+            print(f"    {cid[:8]}: {hscore:.0f}/100 |{bar}|")
+
+        if decisions:
+            print(f"\n  --- Decisions ({len(decisions)}) ---")
+            for d in decisions:
+                dt = d.get("decision_type", "?")
+                tid = d.get("task_id", "?")[:12]
+                reason = d.get("reason", "")[:60]
+                print(f"    [{dt}] {tid}: {reason}")
+
+    # ── CREATE_TASK mode output ─────────────────────────────────────
+    elif mode == "CREATE_TASK":
+        supervisor_result = result.get("result", {})
+        outputs = supervisor_result.get("generated_outputs", {})
+        review_history = supervisor_result.get("review_history", [])
+
+        if outputs:
+            print(f"\n  --- Generated Outputs ({len(outputs)} sections) ---")
+            for key, value in outputs.items():
+                snippet = str(value)[:200].replace("\n", " ")[:200].strip()
+                print(f"  [{key}] {snippet}...")
+
+        if review_history:
+            print(f"\n  --- Review History ({len(review_history)} checkpoints) ---")
+            for r in review_history:
+                step = r.get("step", "?")
+                sc = r.get("score", 0)
+                th = r.get("threshold", 98)
+                dec = r.get("decision", "?")
+                method = r.get("scoring_method", "llm")
+                print(f"    [{step}] score={sc:.0f}/{th:.0f} -> {dec} ({method})")
+
+        # Show specialist full output if verbose
+        specialist_out = supervisor_result.get("specialist_output", "")
+        if specialist_out and args.verbose:
+            print(f"\n  --- Full Specialist Output ---")
+            safe_out = specialist_out[:2000].encode("utf-8", errors="replace").decode("utf-8")
+            print(textwrap.indent(safe_out, "    "))
+
+        # Escalation check
+        if score < 60:
+            print(f"\n  [!] ESCALATION TRIGGERED: score {score:.0f} < 60")
+            print(f"  [!] Manual review required.")
+
+    print(f"\n{'=' * 60}\n")
+    return 0 if status in ("PASSED", "DONE", "monitor_complete") else 1
+
+
+def cmd_monitor(args: argparse.Namespace) -> int:
+    """CEO Monitor: scan active tasks, check SLA, health, and display decisions."""
+    from src.ceo.brain import CEOBrain
+
+    print(f"\n{'=' * 60}")
+    print("  CEO MONITOR - System Health Check")
+    print(f"{'=' * 60}\n")
+
+    try:
+        ceo = CEOBrain()
+        result = ceo.run("", mode="MONITOR")
+    except Exception as exc:
+        print(f"  [ERROR] Monitor failed: {exc}\n")
+        return 1
+
+    active = result.get("active_tasks", 0)
+    violations = result.get("sla_violations", [])
+    health = result.get("campaign_health", {})
+    decisions = result.get("decisions", [])
+
+    print(f"  Active tasks:  {active}")
+    print(f"  SLA violations: {len(violations)}")
+    print(f"  Campaigns:     {len(health)}")
+
+    if violations:
+        print(f"\n  --- SLA Violations ---")
+        for v in violations:
+            print(f"    Task {v.get('task_id','')}: {v.get('reason', v)}")
+
+    if decisions:
+        print(f"\n  --- Decisions ({len(decisions)}) ---")
+        for d in decisions:
+            dt = d.get("decision_type", "?")
+            tid = d.get("task_id", "?")
+            ra = d.get("recommended_action", "?")
+            print(f"    [{dt}] {tid}: {ra}")
+
+    if not violations and not decisions:
+        print(f"\n  [OK] All systems healthy. No action required.")
+
+    print(f"\n{'=' * 60}\n")
+    return 0
+
+
 def cmd_departments(args: argparse.Namespace) -> int:
     """List all departments and their staff."""
     departments = load_all_departments()
@@ -240,6 +397,23 @@ def main() -> int:
 
     p_status = sub.add_parser("status", help="Show system status")
     p_status.set_defaults(func=cmd_status)
+
+    # ── CEO Layer commands ─────────────────────────────────────────
+    p_exec = sub.add_parser(
+        "exec",
+        help="CEO Exec: operator gives a goal, AI does the work end-to-end (CREATE_TASK)"
+    )
+    p_exec.add_argument("--goal", "-g", required=True, help="Business goal in natural language")
+    p_exec.add_argument("--mode", default="CREATE_TASK",
+                        help="CEO mode: CREATE_TASK (default) or MONITOR")
+    p_exec.add_argument("--verbose", "-v", action="store_true", help="Show full specialist output")
+    p_exec.set_defaults(func=cmd_exec)
+
+    p_monitor = sub.add_parser(
+        "monitor",
+        help="CEO Monitor: scan active tasks, check SLA, health scores"
+    )
+    p_monitor.set_defaults(func=cmd_monitor)
 
     args = parser.parse_args()
     return args.func(args)

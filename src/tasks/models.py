@@ -19,6 +19,7 @@ class TaskStatus(str, Enum):
     REVIEW = "review"
     PASSED = "passed"
     FAILED = "failed"
+    ESCALATED = "escalated"
     BLOCKED = "blocked"
     CANCELLED = "cancelled"
     DONE = "done"

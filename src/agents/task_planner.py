@@ -160,20 +160,72 @@ Return a JSON object:
 
 
 def _match_template(task_desc: str) -> tuple[str, str, list[dict[str, Any]]]:
-    """Match task against built-in templates using keyword scoring."""
+    """
+    Match task against built-in templates using weighted keyword scoring.
+
+    Weights:
+      - Action keywords (tao/generate/create → creative): 3pts
+      - Department keywords (creative/media/strategy/data): 3pts
+      - Output keywords (headline/copy/report/analysis): 2pts
+      - Template name words: 1pt
+      - Department codes in steps: 0.5pts
+      - Generic "campaign": 0.25pts (low weight — common word)
+    """
     desc_lower = task_desc.lower()
+
+    # Action keyword → hint at creative work
+    creative_action = any(w in desc_lower for w in [
+        "tao", "tao", "viet", "generate", "create", "design",
+        "headline", "copy", "ad copy", "banner", "content",
+        "quang cao", "poster", "video script", "script",
+    ])
+    # Output keyword → hint at data/analytics work
+    data_action = any(w in desc_lower for w in [
+        "report", "phan tich", "analysis", "insight",
+        "dashboard", "metrics", "performance", "so lieu",
+        "bao cao", "chi so",
+    ])
+    # Retention/CRM keyword
+    retention_action = any(w in desc_lower for w in [
+        "retention", "loyalty", "winback", "email", "automation",
+        "reminder", "khach hang cu", "previous customer",
+    ])
+    # Generic "new campaign" flag (low weight)
+    is_new_campaign = any(w in desc_lower for w in [
+        "new campaign", "chay campaign", "bat dau campaign",
+        "ra mat campaign", "khoi dong",
+    ])
+
     scores: dict[str, float] = {}
 
     for key, tmpl in TASK_TEMPLATES.items():
         score = 0.0
+
+        # Template name words (baseline)
         name_words = tmpl["name"].lower().split()
         for word in name_words:
-            if word in desc_lower:
+            if len(word) > 3 and word in desc_lower:
                 score += 1.0
+
+        # Department codes from steps
         for step in tmpl.get("steps", []):
             for dept in [step["from_department"], step["to_department"]]:
                 if dept in desc_lower:
                     score += 0.5
+
+        # Weighted keyword hints (these override the generic template score)
+        if key == "creative_brief" and creative_action:
+            score += 5.0
+        if key == "new_campaign" and (creative_action or data_action or retention_action):
+            # Don't penalize, but don't inflate either
+            pass
+        if key == "new_campaign" and is_new_campaign:
+            score += 2.0
+        if key == "data_report" and data_action:
+            score += 5.0
+        if key == "retention_campaign" and retention_action:
+            score += 5.0
+
         if score > 0:
             scores[key] = score
 

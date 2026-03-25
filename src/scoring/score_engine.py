@@ -91,7 +91,7 @@ class ScoreEngine:
     ) -> Optional[dict[str, Any]]:
         """Use LLM to score against rubric."""
         llm = get_llm()
-        if not llm.is_available():
+        if llm.primary_provider is None:
             return None
 
         # Build criteria text
