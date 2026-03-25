@@ -8,6 +8,7 @@ import logging
 from typing import Any
 
 from src.agents.state import AgenticState
+from src.config import SETTINGS
 from src.tools.web_search import search_web, SearchResult
 from src.tools.data_analysis import DataAnalysisTool
 
@@ -46,9 +47,11 @@ Format: - Bullet point (source: source_name)"""
 
     try:
         llm = get_llm()
+        if llm.primary_provider is None:
+            return results_text
         return llm.complete(prompt, SYSTEM_PROMPT, temperature=0.3, max_tokens=768)
     except Exception as exc:
-        logger.warning(f"Research synthesis LLM failed: {exc}")
+        logger.warning("Research synthesis LLM failed: %s", exc)
         return results_text
 
 
@@ -58,9 +61,17 @@ def run_research(state: AgenticState) -> AgenticState:
     and attaches research_results to the state.
     """
     task_desc = state.get("task_description", "")
+    current_step = state.get("current_step", {})
     policy = state.get("policy", {})
     required_inputs = policy.get("required_inputs", [])
     research_results: dict[str, Any] = {}
+
+    # Build search query from task + step context
+    search_query = " | ".join(
+        part
+        for part in [task_desc, current_step.get("objective", ""), state.get("to_department", "")]
+        if part
+    )
 
     # Determine if research is needed
     research_keywords = [
@@ -71,11 +82,11 @@ def run_research(state: AgenticState) -> AgenticState:
     needs_search = any(kw in task_desc.lower() for kw in research_keywords)
 
     # ── Web Search ──────────────────────────────────────────────────
-    if needs_search and SETTINGS.TAVILY_API_KEY or SETTINGS.SERP_API_KEY:
+    if needs_search and (SETTINGS.TAVILY_API_KEY or SETTINGS.SERP_API_KEY):
         try:
             logger.info("Research: running web search")
             results = search_web(
-                query=task_desc,
+                query=search_query or task_desc,
                 max_results=SETTINGS.RESEARCH_MAX_RESULTS,
             )
             research_results["search_results"] = [
@@ -84,13 +95,12 @@ def run_research(state: AgenticState) -> AgenticState:
             ]
             research_results["search_synthesis"] = _synthesise_with_llm(state, results)
         except Exception as exc:
-            logger.warning(f"Web search failed: {exc}")
+            logger.warning("Web search failed: %s", exc)
             research_results["search_error"] = str(exc)
     else:
         logger.info("Research: skipping web search (no API keys or not needed)")
 
-    # ── Data Analysis ───────────────────────────────────────────────
-    # Check if required_inputs contain data-like keywords
+    # ── Data Analysis ────────────────────────────────────────────────
     data_keywords = ["metrics", "data", "report", "spend", "revenue", "performance"]
     needs_data_analysis = any(kw in " ".join(required_inputs).lower() for kw in data_keywords)
 
@@ -98,14 +108,13 @@ def run_research(state: AgenticState) -> AgenticState:
         try:
             logger.info("Research: running data analysis")
             data_tool = DataAnalysisTool()
-            # Placeholder: in real usage, required_inputs would contain raw data
             analysis_result = data_tool.analyse(state.get("required_inputs", {}))
             research_results["data_analysis"] = analysis_result
         except Exception as exc:
-            logger.warning(f"Data analysis failed: {exc}")
+            logger.warning("Data analysis failed: %s", exc)
             research_results["data_analysis_error"] = str(exc)
 
-    logger.info(f"Research node complete: {list(research_results.keys())}")
+    logger.info("Research node complete: %s", list(research_results.keys()))
 
     return {
         **state,

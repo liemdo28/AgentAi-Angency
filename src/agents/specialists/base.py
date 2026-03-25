@@ -9,20 +9,13 @@ from abc import ABC, abstractmethod
 from typing import Any, Optional
 
 from src.agency_registry import load_department_bundle
-from src.llm import get_llm, FallbackLLM
+from src.llm import FallbackLLM, get_llm
 
 logger = logging.getLogger(__name__)
 
 
 class BaseSpecialist(ABC):
-    """
-    Abstract base for all department specialist agents.
-
-    Each subclass must:
-    1. Set `self.department` to its department key
-    2. Implement `build_prompt()` to return the specialist's system prompt
-    3. Optionally override `parse_output()` for custom parsing
-    """
+    """Abstract base for all department specialist agents."""
 
     department: str = ""
 
@@ -38,31 +31,21 @@ class BaseSpecialist(ABC):
         try:
             self._bundle = load_department_bundle(self.department)
         except Exception as exc:
-            logger.error(f"Failed to load bundle for {self.department}: {exc}")
+            logger.error("Failed to load bundle for %s: %s", self.department, exc)
             self._bundle = {}
-
-    # ── Prompt building ────────────────────────────────────────────────
 
     @abstractmethod
     def build_system_prompt(self) -> str:
-        """
-        Return the system prompt that defines this specialist's role,
-        responsibilities, and output format.
-        """
-        ...
+        """Return the system prompt for this specialist."""
 
-    def build_user_prompt(
-        self,
-        state: dict[str, Any],
-    ) -> str:
-        """
-        Build the user-facing prompt with task context.
-        Override in subclass for custom formatting.
-        """
+    def build_user_prompt(self, state: dict[str, Any]) -> str:
+        """Build the user-facing prompt with task and artifact context."""
         task_desc = state.get("task_description", "")
         policy = state.get("policy", {})
         research = state.get("research_results", {})
         feedback = state.get("leader_feedback", "")
+        current_step = state.get("current_step", {})
+        artifacts = state.get("artifacts", {}) or state.get("required_inputs", {})
 
         required_inputs = ", ".join(policy.get("required_inputs", []))
         expected_outputs = ", ".join(policy.get("expected_outputs", []))
@@ -70,13 +53,36 @@ class BaseSpecialist(ABC):
 
         synthesis = research.get("search_synthesis", "(no research data)")
         search_results = research.get("search_results", [])
-        search_refs = "\n".join(f"[{i+1}] {r['title']} — {r['url']}" for i, r in enumerate(search_results[:5]))
+        search_refs = "\n".join(
+            f"[{i + 1}] {result['title']} - {result['url']}"
+            for i, result in enumerate(search_results[:5])
+        )
+        artifact_summary = "\n".join(
+            f"- {key}: {str(value)[:250]}"
+            for key, value in list(artifacts.items())[:8]
+        ) or "- No structured artifacts yet."
+        feedback_block = ""
+        if feedback:
+            feedback_block = (
+                "## PREVIOUS FEEDBACK (from leader, must address):\n"
+                f"{feedback}\n"
+            )
+        research_refs_block = f"## RESEARCH REFERENCES:\n{search_refs}\n" if search_refs else ""
+        feedback_reminder = (
+            "\nIMPORTANT: Address the following feedback from the leader reviewer:\n"
+            f"{feedback}"
+        ) if feedback else ""
 
-        prompt = f"""## TASK
+        return f"""## TASK
 {task_desc}
 
+## BUSINESS STEP
+- Step: {current_step.get('name', 'Single-step execution')}
+- Objective: {current_step.get('objective', task_desc)}
+- Quality threshold: {state.get('quality_threshold', 98.0)}
+
 ## POLICY CONTEXT
-- From: {policy.get('from_department', '?')} → To: {policy.get('to_department', '?')}
+- From: {policy.get('from_department', '?')} -> To: {policy.get('to_department', '?')}
 - Required inputs: {required_inputs}
 - Expected outputs: {expected_outputs}
 - SLA: {sla}h
@@ -84,25 +90,21 @@ class BaseSpecialist(ABC):
 ## RESEARCH DATA
 {synthesis}
 
-{f"## PREVIOUS FEEDBACK (from leader, must address):\n{feedback}\n" if feedback else ""}
-{f"## RESEARCH REFERENCES:\n{search_refs}\n" if search_refs else ""}
+## AVAILABLE ARTIFACTS
+{artifact_summary}
+
+{feedback_block}
+{research_refs_block}
 
 ## YOUR TASK
 As the {self.department.replace('_', ' ').title()} Specialist, produce the expected outputs.
 Follow the output format specified in your system prompt.
 Be specific, actionable, and aligned with the research data above.
-{f"\nIMPORTANT: Address the following feedback from the leader reviewer:\n{feedback}" if feedback else ""}
+{feedback_reminder}
 """
-        return prompt
-
-    # ── Output parsing ─────────────────────────────────────────────────
 
     def parse_output(self, raw_text: str, state: dict[str, Any]) -> dict[str, Any]:
-        """
-        Parse LLM raw output into a structured dict keyed by expected_outputs.
-        Default implementation returns a simple dict.
-        Override in subclass for custom parsing.
-        """
+        """Parse LLM raw output into a structured dict keyed by expected outputs."""
         policy = state.get("policy", {})
         expected_outputs = policy.get("expected_outputs", [])
         return {
@@ -114,27 +116,51 @@ Be specific, actionable, and aligned with the research data above.
         """Try to extract a named section from LLM output."""
         import re
         patterns = [
-            rf"(?i)^{section_name}[\s:\-]+(.+?)(?=\n[A-Z]|\Z)",  # SECTION_NAME: content
-            rf"(?i)^\*\**{section_name}\*\*\*[\s:\-]*(.+?)(?=\n\*\*\*|\Z)",  # ***Section***
-            rf"(?i)^{section_name.replace('_', ' ')}[\s:\-]+(.+?)(?=\n[A-Z]|\Z)",
+            rf"(?i)^##\s*{re.escape(section_name)}[\s:\-]+(.+?)(?=\n##|\Z)",
+            rf"(?i)^##\s*{re.escape(section_name.replace('_', ' '))}[\s:\-]+(.+?)(?=\n##|\Z)",
+            rf"(?i)^{re.escape(section_name)}[\s:\-]+(.+?)(?=\n[A-Z]|\Z)",
+            rf"(?i)^{re.escape(section_name.replace('_', ' '))}[\s:\-]+(.+?)(?=\n[A-Z]|\Z)",
         ]
         for pattern in patterns:
             match = re.search(pattern, text, re.MULTILINE | re.DOTALL)
             if match:
                 return match.group(1).strip()
-        return text.strip()  # fallback: return whole text
+        return text.strip()
 
-    # ── Generation ─────────────────────────────────────────────────────
+    def build_fallback_output(self, state: dict[str, Any]) -> str:
+        """Create a deterministic draft when no LLM provider is available."""
+        task_desc = state.get("task_description", "")
+        current_step = state.get("current_step", {})
+        research = state.get("research_results", {})
+        policy = state.get("policy", {})
+        expected_outputs = policy.get("expected_outputs", []) or ["deliverable"]
+        research_summary = research.get("search_synthesis", "No external research available.")
+        artifact_keys = ", ".join((state.get("artifacts") or state.get("required_inputs") or {}).keys()) or "task description only"
+        sections: list[str] = []
+
+        for output_key in expected_outputs:
+            sections.append(
+                f"## {output_key}\n"
+                f"- Department owner: {self.department}\n"
+                f"- Step objective: {current_step.get('objective', task_desc)}\n"
+                f"- Primary recommendation: Create a deliverable for '{output_key}' that directly supports '{task_desc}'.\n"
+                f"- Inputs used: {artifact_keys}\n"
+                f"- Research context: {str(research_summary)[:500]}\n"
+                f"- Next action: Review with the {policy.get('approver_role', 'department lead')} and refine if needed."
+            )
+
+        return "\n\n".join(sections)
 
     def generate(self, state: dict[str, Any]) -> dict[str, Any]:
-        """
-        Main entry point — calls LLM and returns structured outputs.
-        """
+        """Main entry point — calls the LLM and returns structured outputs."""
         system = self.build_system_prompt()
         user = self.build_user_prompt(state)
 
         try:
             llm = self._llm or get_llm()
+            if llm.primary_provider is None:
+                raise RuntimeError("No configured LLM provider for specialist generation")
+
             raw = llm.complete(
                 prompt=user,
                 system=system,
@@ -143,22 +169,23 @@ Be specific, actionable, and aligned with the research data above.
             )
             structured = self.parse_output(raw, state)
             logger.info(
-                f"[{self.department}] Specialist generated outputs: "
-                f"{list(structured.keys())}"
+                "[%s] Specialist generated outputs: %s",
+                self.department,
+                list(structured.keys()),
             )
             return {
                 "specialist_output": raw,
                 "generated_outputs": structured,
             }
         except Exception as exc:
-            logger.exception(f"[{self.department}] Specialist failed: {exc}")
+            logger.warning("[%s] Specialist LLM failed, using fallback draft: %s", self.department, exc)
+            raw = self.build_fallback_output(state)
+            structured = self.parse_output(raw, state)
             return {
-                "specialist_output": "",
-                "generated_outputs": {},
-                "errors": [f"[{self.department}] Specialist error: {exc}"],
+                "specialist_output": raw,
+                "generated_outputs": structured,
+                "errors": [*state.get("errors", []), f"[{self.department}] Specialist fallback: {exc}"],
             }
-
-    # ── Registry access helpers ────────────────────────────────────────
 
     @property
     def leader(self) -> Any:

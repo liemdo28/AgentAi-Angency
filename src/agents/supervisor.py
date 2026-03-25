@@ -11,7 +11,6 @@ from typing import Any, Optional
 
 from src.agents.graph import get_graph
 from src.agents.state import AgenticState
-from src.config import SETTINGS
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +35,8 @@ class AgencySupervisor:
         task_id: Optional[str] = None,
         from_department: Optional[str] = None,
         to_department: Optional[str] = None,
+        task_type: Optional[str] = None,
+        quality_threshold: float = 98.0,
     ) -> dict[str, Any]:
         """
         Run the full workflow for a task.
@@ -43,27 +44,34 @@ class AgencySupervisor:
         Parameters
         ----------
         task_description : Human-readable task description
-        required_inputs   : Optional dict of input artifacts (e.g. {"lead_profile": {...}})
+        required_inputs  : Optional dict of input artifacts
         task_id          : Optional override for the task ID
-        from_department  : Optional pre-specified source dept (skips router)
-        to_department    : Optional pre-specified target dept (skips router)
+        from_department : Optional pre-specified source dept (skips router)
+        to_department   : Optional pre-specified target dept (skips router)
+        task_type       : Optional task type template override
+        quality_threshold: Per-step quality threshold (default 98.0)
 
         Returns
         -------
         Final AgenticState dict after the workflow completes
         """
         task_id = task_id or str(uuid.uuid4())
+        initial_artifacts = dict(required_inputs or {})
 
         initial_state: AgenticState = {
             "task_id": task_id,
             "task_description": task_description,
             "from_department": from_department or "",
             "to_department": to_department or "",
-            "required_inputs": required_inputs or {},
+            "required_inputs": initial_artifacts,
+            "artifacts": initial_artifacts,
             "research_results": {},
             "generated_outputs": {},
+            "final_outputs": {},
             "leader_score": 0.0,
             "leader_feedback": "",
+            "quality_threshold": quality_threshold,
+            "quality_breakdown": {},
             "status": "DRAFT",
             "conversation_history": [],
             "errors": [],
@@ -71,17 +79,22 @@ class AgencySupervisor:
             "next_action": "",
             "email_sent": False,
             "output_files": [],
+            "task_type": task_type or "",
+            "task_plan": [],
+            "current_step_index": 0,
+            "current_step": {},
+            "completed_steps": [],
+            "review_history": [],
             "metadata": {},
         }
 
-        logger.info(f"[{task_id}] Starting workflow: {task_description[:80]}...")
+        logger.info("[%s] Starting workflow: %s...", task_id, task_description[:80])
 
         start = time.time()
         try:
-            # Invoke the compiled LangGraph
             final_state: dict[str, Any] = self._graph.invoke(initial_state)
         except Exception as exc:
-            logger.exception(f"[{task_id}] Graph invocation failed: {exc}")
+            logger.exception("[%s] Graph invocation failed: %s", task_id, exc)
             final_state = {
                 **initial_state,
                 "status": "FAILED",
@@ -90,9 +103,11 @@ class AgencySupervisor:
 
         elapsed = time.time() - start
         logger.info(
-            f"[{task_id}] Workflow done in {elapsed:.1f}s — "
-            f"status={final_state.get('status')} "
-            f"score={final_state.get('leader_score', 0):.0f}/100"
+            "[%s] Workflow done in %.1fs - status=%s score=%.0f/100",
+            task_id,
+            elapsed,
+            final_state.get("status"),
+            final_state.get("leader_score", 0),
         )
 
         return final_state
@@ -113,12 +128,16 @@ class AgencySupervisor:
         initial_state: AgenticState = {
             "task_id": task_id,
             "task_description": task_description,
-            "required_inputs": required_inputs or {},
+            "required_inputs": dict(required_inputs or {}),
+            "artifacts": dict(required_inputs or {}),
             "status": "DRAFT",
             "errors": [],
             "retry_count": 0,
+            "task_plan": [],
+            "completed_steps": [],
+            "review_history": [],
         }
 
-        logger.info(f"[{task_id}] Starting STREAM workflow")
+        logger.info("[%s] Starting STREAM workflow", task_id)
         for state_update in self._graph.stream(initial_state):
             yield state_update
