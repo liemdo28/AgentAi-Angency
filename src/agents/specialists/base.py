@@ -39,13 +39,15 @@ class BaseSpecialist(ABC):
         """Return the system prompt for this specialist."""
 
     def build_user_prompt(self, state: dict[str, Any]) -> str:
-        """Build the user-facing prompt with task and artifact context."""
+        """Build the user-facing prompt with task, artifact, memory, and context."""
         task_desc = state.get("task_description", "")
         policy = state.get("policy", {})
         research = state.get("research_results", {})
         feedback = state.get("leader_feedback", "")
         current_step = state.get("current_step", {})
         artifacts = state.get("artifacts", {}) or state.get("required_inputs", {})
+        memory_context = state.get("memory_context", "")
+        external_context = state.get("external_context", "")
 
         required_inputs = ", ".join(policy.get("required_inputs", []))
         expected_outputs = ", ".join(policy.get("expected_outputs", []))
@@ -73,6 +75,9 @@ class BaseSpecialist(ABC):
             f"{feedback}"
         ) if feedback else ""
 
+        memory_block = f"\n{memory_context}\n" if memory_context else ""
+        external_block = f"\n{external_context}\n" if external_context else ""
+
         return f"""## TASK
 {task_desc}
 
@@ -86,7 +91,7 @@ class BaseSpecialist(ABC):
 - Required inputs: {required_inputs}
 - Expected outputs: {expected_outputs}
 - SLA: {sla}h
-
+{memory_block}{external_block}
 ## RESEARCH DATA
 {synthesis}
 
@@ -198,3 +203,43 @@ Be specific, actionable, and aligned with the research data above.
     @property
     def policy(self) -> dict[str, Any]:
         return self._bundle.get("policy", {})
+
+    # ── Tool Dispatcher ───────────────────────────────────────────────
+
+    def get_tools(self) -> list[str]:
+        """Return list of available tool names for this specialist."""
+        # All specialists can use: file_storage, email, webhook
+        base_tools = ["file_storage", "email", "webhook"]
+        dept_tools = {
+            "data": ["google_sheets", "ads_api"] + base_tools,
+            "media": ["ads_api"] + base_tools,
+            "strategy": ["google_sheets", "ads_api"] + base_tools,
+            "account": ["google_sheets"] + base_tools,
+            "creative": base_tools + ["file_storage"],
+            "production": base_tools + ["file_storage"],
+        }
+        return dept_tools.get(self.department, base_tools)
+
+    def inject_tools_into_system_prompt(self, system_prompt: str) -> str:
+        """Append tool availability and usage instructions to the system prompt."""
+        tools = self.get_tools()
+        if not tools:
+            return system_prompt
+        tools_list = "\n".join(f"- {t}" for t in tools)
+        tool_block = (
+            f"\n\n## AVAILABLE TOOLS\n"
+            f"You have access to the following tools via the ToolDispatcher:\n"
+            f"{tools_list}\n\n"
+            f"To call a tool, include this JSON block in your response:\n"
+            f'{{"__tool__": "tool_name", "params": {{"key": "value"}}}}'
+        )
+        return system_prompt + tool_block
+
+    def execute_tool(self, tool_name: str, params: dict[str, Any]) -> Any:
+        """Execute a tool via the dispatcher and return the result."""
+        from src.tools.dispatcher import ToolDispatcher
+        dispatcher = ToolDispatcher()
+        result = dispatcher.run(tool_name, params)
+        if not result.success:
+            raise RuntimeError(f"Tool '{tool_name}' failed: {result.error}")
+        return result.data

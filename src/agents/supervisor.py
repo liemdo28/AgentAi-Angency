@@ -141,3 +141,33 @@ class AgencySupervisor:
         logger.info("[%s] Starting STREAM workflow", task_id)
         for state_update in self._graph.stream(initial_state):
             yield state_update
+
+    def run_as_ceo(
+        self,
+        goal: str,
+        *,
+        mode: str = "CREATE_TASK",
+    ) -> dict[str, Any]:
+        """
+        Run the CEO Brain layer as the outer orchestrator.
+        This wraps the LangGraph workflow with agency-wide goal interpretation,
+        task creation, SLA monitoring, and intervention logic.
+
+        Modes:
+        - CREATE_TASK: interpret goal -> create Task -> run LangGraph
+        - MONITOR    : scan active tasks -> check SLA/KPI/health -> decisions
+        - INTERVENE  : handle SLA breaches and escalations
+
+        Parameters
+        ----------
+        goal : Natural-language goal from the operator
+        mode : CREATE_TASK | MONITOR | INTERVENE
+
+        Returns
+        -------
+        dict with keys: action, tasks_affected, decisions, summary
+        """
+        from src.ceo.brain import CEOBrain
+
+        ceo = CEOBrain()
+        return ceo.run(goal, mode=mode)

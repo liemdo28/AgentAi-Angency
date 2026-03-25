@@ -118,5 +118,12 @@ class AgenticState(TypedDict, total=False):
     email_sent: NotRequired[bool]
     output_files: NotRequired[list[str]]
 
+    # ── CEO + Memory (Layer 1 / Layer 3) ───────────────────────────────
+    account_id: NotRequired[str]
+    campaign_id: NotRequired[str]
+    memory_context: NotRequired[str]   # retrieved memories formatted for injection
+    external_context: NotRequired[str]  # weather + market trends context block
+    tool_dispatcher: NotRequired[Any]   # ToolDispatcher instance for tool calls
+
     # ── Misc ─────────────────────────────────────────────────────────
     metadata: NotRequired[dict[str, Any]]

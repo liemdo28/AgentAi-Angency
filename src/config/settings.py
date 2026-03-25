@@ -56,8 +56,31 @@ class Settings:
     DEFAULT_SLA_HOURS: int = 24
     SCORE_THRESHOLD: float = 98.0
     MAX_ROUTE_RETRIES: int = 3
+    MIN_ACCEPTABLE_SCORE: float = 60.0
     RESEARCH_MAX_RESULTS: int = 10
     RESEARCH_TIMEOUT_SECONDS: int = 30
+
+    # ── File Storage ─────────────────────────────────────────────
+    LOCAL_STORAGE_PATH: str = os.getenv("LOCAL_STORAGE_PATH", "./storage")
+    S3_PREFIX: str = os.getenv("S3_PREFIX", "")
+    PUBLIC_FILE_URL: str = os.getenv("PUBLIC_FILE_URL", "")
+
+    # ── Google Sheets ────────────────────────────────────────────
+    GOOGLE_APPLICATION_CREDENTIALS: str = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+
+    # ── Ads APIs ────────────────────────────────────────────────
+    GOOGLE_ADS_DEVELOPER_TOKEN: str = os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN", "")
+    META_ACCESS_TOKEN: str = os.getenv("META_ACCESS_TOKEN", "")
+
+    # ── IMAP (Inbound Email) ─────────────────────────────────────
+    IMAP_HOST: str = os.getenv("IMAP_HOST", "")
+    IMAP_USER: str = os.getenv("IMAP_USER", "")
+    IMAP_PASSWORD: str = os.getenv("IMAP_PASSWORD", "")
+
+    # ── CEO / Monitoring ────────────────────────────────────────
+    CEO_MONITOR_INTERVAL_SECONDS: int = int(os.getenv("CEO_MONITOR_INTERVAL_SECONDS", "300"))
+    HEALTH_SCORE_WARNING_THRESHOLD: float = 70.0
+    SLA_BREACH_ESCALATION_HOURS: float = 48.0
 
     # ── FastAPI ───────────────────────────────────────────────────
     API_HOST: str = os.getenv("API_HOST", "0.0.0.0")

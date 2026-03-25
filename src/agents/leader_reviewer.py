@@ -1,5 +1,6 @@
 """
 Leader Reviewer node — scores specialist output and decides pass/fail/retry.
+Delegates to src.scoring.ScoreEngine when available; falls back to inline LLM review.
 """
 from __future__ import annotations
 
@@ -141,7 +142,7 @@ def _heuristic_review(
 def review_output(state: AgenticState) -> AgenticState:
     """Score specialist output and set the next routing action."""
     task_desc = state.get("task_description", "")
-    to_department = state.get("to_department", "")
+    to_department = state.get("to_department", "strategy")
     specialist_output = state.get("specialist_output", "")
     policy = state.get("policy", {})
     expected_outputs = list(policy.get("expected_outputs", []))
@@ -150,6 +151,7 @@ def review_output(state: AgenticState) -> AgenticState:
         state.get("quality_threshold")
         or state.get("current_step", {}).get("quality_threshold", SCORE_THRESHOLD)
     )
+    task_type = state.get("task_type", "ad_hoc")
 
     if not specialist_output:
         logger.warning("Leader review: no specialist output to review")
@@ -162,9 +164,46 @@ def review_output(state: AgenticState) -> AgenticState:
             "next_action": "escalate",
         }
 
-    dept_rubric = _get_department_rubric(to_department)
-    rubric_block = f"## DEPARTMENT RUBRIC NOTE\n{dept_rubric}" if dept_rubric else ""
-    user_prompt = f"""## TASK
+    # Try ScoreEngine first (uses rubric registry + LLM or heuristic fallback)
+    try:
+        from src.scoring.score_engine import ScoreEngine
+        from src.scoring.rubric_registry import get_rubric
+
+        rubric = get_rubric(to_department)
+        engine = ScoreEngine()
+        result = engine.score(to_department, specialist_output, task_type=task_type)
+
+        score = result["overall_score"]
+        breakdown = result["breakdown"]
+        scoring_method = result.get("scoring_method", "engine")
+
+        # Derive feedback from rubric criteria analysis
+        criteria_scores = result.get("criteria_scores", {})
+        feedback_parts = []
+        for criterion, data in criteria_scores.items():
+            if isinstance(data, dict) and data.get("notes"):
+                feedback_parts.append(f"[{criterion}] {data['notes']}")
+        feedback = "\n".join(feedback_parts) if feedback_parts else ""
+
+        logger.info(
+            "Leader review [%s] via ScoreEngine(%s): score=%.1f threshold=%.1f",
+            to_department,
+            scoring_method,
+            score,
+            score_threshold,
+        )
+
+    except Exception as exc:
+        # Fallback: LLM review directly
+        logger.warning("ScoreEngine unavailable, falling back to LLM review: %s", exc)
+        try:
+            llm = get_llm()
+            if llm.primary_provider is None:
+                raise RuntimeError("No configured LLM provider for review")
+
+            dept_rubric = _get_department_rubric(to_department)
+            rubric_block = f"## DEPARTMENT RUBRIC NOTE\n{dept_rubric}" if dept_rubric else ""
+            user_prompt = f"""## TASK
 {task_desc}
 
 ## DEPARTMENT
@@ -183,70 +222,64 @@ def review_output(state: AgenticState) -> AgenticState:
 
 Evaluate the specialist output using the rubric and return ONLY JSON.
 """
+            raw_response = llm.complete(
+                prompt=user_prompt,
+                system=SYSTEM_PROMPT,
+                temperature=0.2,
+                max_tokens=1024,
+            )
+            llm_result: dict[str, Any] = extract_first_json_object(raw_response)
 
-    try:
-        llm = get_llm()
-        if llm.primary_provider is None:
-            raise RuntimeError("No configured LLM provider for review")
+            score = float(llm_result.get("score", 0))
+            breakdown = {
+                key: float(value)
+                for key, value in dict(llm_result.get("breakdown", {})).items()
+                if isinstance(value, (int, float))
+            }
+            feedback = str(llm_result.get("feedback", ""))
+            scoring_method = "llm"
 
-        raw_response = llm.complete(
-            prompt=user_prompt,
-            system=SYSTEM_PROMPT,
-            temperature=0.2,
-            max_tokens=1024,
-        )
-        result: dict[str, Any] = extract_first_json_object(raw_response)
+        except Exception as llm_exc:
+            logger.warning("Leader review LLM failed, using heuristic review: %s", llm_exc)
+            return _heuristic_review(
+                state,
+                expected_outputs=expected_outputs,
+                retry_count=retry_count,
+                score_threshold=score_threshold,
+                to_department=to_department,
+                reason=str(llm_exc),
+            )
 
-        score = float(result.get("score", 0))
-        breakdown = {
-            key: float(value)
-            for key, value in dict(result.get("breakdown", {})).items()
-            if isinstance(value, (int, float))
-        }
-        decision = str(result.get("decision", "FAIL")).upper()
-        feedback = str(result.get("feedback", ""))
+    # Decision
+    if score >= score_threshold:
+        next_action = "passed"
+        status = "PASSED"
+    elif retry_count >= MAX_RETRIES:
+        logger.warning("Max retries (%s) exceeded - escalating to human", MAX_RETRIES)
+        next_action = "escalate"
+        status = "FAILED"
+    else:
+        next_action = "failed"
+        status = "REVIEW_FAILED"
 
-        logger.info("Leader review [%s]: score=%.1f decision=%s", to_department, score, decision)
-
-        if decision == "PASS" or score >= score_threshold:
-            next_action = "passed"
-            status = "PASSED"
-        elif retry_count >= MAX_RETRIES:
-            logger.warning("Max retries (%s) exceeded - escalating to human", MAX_RETRIES)
-            next_action = "escalate"
-            status = "FAILED"
-        else:
-            next_action = "failed"
-            status = "REVIEW_FAILED"
-
-        return {
-            **state,
-            "leader_score": score,
-            "leader_feedback": feedback,
-            "quality_threshold": score_threshold,
-            "quality_breakdown": breakdown,
-            "review_history": [
-                *state.get("review_history", []),
-                {
-                    "step": state.get("current_step", {}).get("name", to_department),
-                    "score": score,
-                    "threshold": score_threshold,
-                    "decision": decision,
-                    "retry_count": retry_count,
-                },
-            ],
-            "status": status,
-            "next_action": next_action,
-            "retry_count": retry_count + (1 if next_action == "failed" else 0),
-        }
-
-    except Exception as exc:
-        logger.warning("Leader review LLM failed, using heuristic review: %s", exc)
-        return _heuristic_review(
-            state,
-            expected_outputs=expected_outputs,
-            retry_count=retry_count,
-            score_threshold=score_threshold,
-            to_department=to_department,
-            reason=str(exc),
-        )
+    return {
+        **state,
+        "leader_score": score,
+        "leader_feedback": feedback,
+        "quality_threshold": score_threshold,
+        "quality_breakdown": breakdown,
+        "review_history": [
+            *state.get("review_history", []),
+            {
+                "step": state.get("current_step", {}).get("name", to_department),
+                "score": score,
+                "threshold": score_threshold,
+                "decision": "PASS" if next_action == "passed" else "FAIL",
+                "retry_count": retry_count,
+                "scoring_method": scoring_method,
+            },
+        ],
+        "status": status,
+        "next_action": next_action,
+        "retry_count": retry_count + (1 if next_action == "failed" else 0),
+    }

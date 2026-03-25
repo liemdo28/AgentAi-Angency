@@ -90,6 +90,66 @@ def email_notification_node(state: AgenticState) -> AgenticState:
     return send_notification(state)
 
 
+def sla_check_node(state: AgenticState) -> AgenticState:
+    """Record SLA deadline after each step completes."""
+    from src.tasks.sla_tracker import SLATracker
+    from src.db.repositories.task_repo import TaskRepository
+    from src.tasks.models import TaskStatus
+    task_id = state.get("task_id", "")
+    if task_id:
+        try:
+            repo = TaskRepository()
+            task = repo.get(task_id)
+            if task and task.status == TaskStatus.IN_PROGRESS:
+                tracker = SLATracker(repo)
+                tracker.check_task(task)
+        except Exception as exc:
+            logger.warning("SLA check failed for task %s: %s", task_id, exc)
+    return state
+
+
+def kpi_record_node(state: AgenticState) -> AgenticState:
+    """Record KPI metrics after task completion."""
+    from src.tasks.kpi_store import KPIStore
+    from src.db.repositories.task_repo import TaskRepository
+    task_id = state.get("task_id", "")
+    campaign_id = state.get("campaign_id", "")
+    kpis = state.get("metadata", {}).get("kpis", {})
+    if task_id and kpis:
+        try:
+            repo = TaskRepository()
+            store = KPIStore(repo)
+            store.record(task_id, campaign_id, kpis)
+        except Exception as exc:
+            logger.warning("KPI record failed for task %s: %s", task_id, exc)
+    return state
+
+
+def retry_injection_node(state: AgenticState) -> AgenticState:
+    """
+    Injects retry feedback into the specialist prompt when looping back.
+    This node reads leader_feedback and ensures it is prepended to the next
+    specialist call. Activates only when next_action == 'failed'.
+    """
+    feedback = state.get("leader_feedback", "")
+    retry_count = state.get("retry_count", 0)
+    if feedback and retry_count > 0:
+        # Attach retry context to metadata so the specialist can pick it up
+        logger.info(
+            "Retry injection: attempt %d, feedback length=%d",
+            retry_count,
+            len(feedback),
+        )
+    return {
+        **state,
+        "metadata": {
+            **state.get("metadata", {}),
+            "retry_attempt": retry_count,
+            "retry_feedback": feedback,
+        },
+    }
+
+
 def route_decision(state: AgenticState) -> Literal["valid", "invalid"]:
     """After router: proceed if route is valid, else end."""
     return state.get("next_action", "invalid")
@@ -114,6 +174,9 @@ def build_graph() -> StateGraph:
     builder.add_node("specialist", specialist_node)
     builder.add_node("leader_review", leader_review_node)
     builder.add_node("task_progress", task_progress_node)
+    builder.add_node("sla_check", sla_check_node)
+    builder.add_node("kpi_record", kpi_record_node)
+    builder.add_node("retry_injection", retry_injection_node)
     builder.add_node("email_notification", email_notification_node)
 
     builder.add_edge(START, "task_planner")
@@ -131,15 +194,25 @@ def build_graph() -> StateGraph:
     builder.add_conditional_edges(
         "leader_review",
         review_decision,
-        {"passed": "task_progress", "failed": "specialist", "escalate": END},
+        {
+            "passed": "task_progress",
+            "failed": "retry_injection",
+            "escalate": END,
+        },
     )
+
+    # retry_injection adds feedback to metadata, then loops back to specialist
+    builder.add_edge("retry_injection", "specialist")
 
     builder.add_conditional_edges(
         "task_progress",
         progress_decision,
-        {"continue": "router", "done": "email_notification"},
+        {"continue": "router", "done": "sla_check"},
     )
 
+    # After sla_check, record KPIs then send email
+    builder.add_edge("sla_check", "kpi_record")
+    builder.add_edge("kpi_record", "email_notification")
     builder.add_edge("email_notification", END)
 
     return builder
