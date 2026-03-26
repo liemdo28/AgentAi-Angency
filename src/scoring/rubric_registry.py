@@ -533,9 +533,9 @@ RUBRIC_DEFINITIONS: dict[str, Rubric] = {
         ],
     ),
 
-    # ── 10. CRM ──────────────────────────────────────────────────────────
-    "crm": Rubric(
-        department="crm",
+    # ── 10. CRM / CRM Automation ──────────────────────────────────────────
+    "crm_automation": Rubric(
+        department="crm_automation",
         task_types=("retention_campaign", "creative_brief", "ad_hoc"),
         notes="CRM outputs must be data-driven, personalized, and lifecycle-appropriate.",
         criteria=[
@@ -649,9 +649,16 @@ RUBRIC_DEFINITIONS: dict[str, Rubric] = {
 }
 
 
+_DEPARTMENT_ALIASES: dict[str, str] = {
+    "crm": "crm_automation",
+}
+
+
 def get_rubric(department: str) -> Rubric:
     """Get rubric for a department, defaulting to 'strategy' if unknown."""
-    rubric = RUBRIC_DEFINITIONS.get(department.lower())
+    key = department.lower()
+    key = _DEPARTMENT_ALIASES.get(key, key)
+    rubric = RUBRIC_DEFINITIONS.get(key)
     if rubric is None:
         logger.warning("No rubric for department '%s', using strategy rubric", department)
         rubric = RUBRIC_DEFINITIONS["strategy"]

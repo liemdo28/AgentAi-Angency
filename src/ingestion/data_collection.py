@@ -184,7 +184,29 @@ def process_inbound_email(
     if not saved_files:
         logger.info("Inbound email from %s had no attachments.", sender)
 
-    # ── 4. Trigger Data AI task ───────────────────────────────────────
+    # ── 4. Parse files and extract KPIs ──────────────────────────────
+    parsed_kpis: dict = {}
+    file_summaries: list[str] = []
+    try:
+        from src.ingestion.file_parser import extract_kpis_from_rows, parse_files
+
+        parse_results = parse_files(saved_files)
+        all_rows: list[dict] = []
+        for pr in parse_results:
+            file_summaries.append(pr.summary())
+            if pr.rows:
+                all_rows.extend(pr.rows)
+            if pr.text:
+                file_summaries.append(f"  Text preview: {pr.text[:200]}...")
+        if all_rows:
+            parsed_kpis = extract_kpis_from_rows(all_rows)
+            logger.info("Extracted KPIs from %d rows: %s", len(all_rows), list(parsed_kpis.keys()))
+    except Exception as parse_exc:
+        err = f"File parsing partial failure: {parse_exc}"
+        logger.warning(err)
+        errors.append(err)
+
+    # ── 5. Trigger Data AI task ───────────────────────────────────────
     if trigger_task and saved_files:
         try:
             from src.db.connection import init_db
@@ -193,6 +215,11 @@ def process_inbound_email(
 
             init_db()
             repo = TaskRepository()
+
+            file_detail = "\n".join(f"  - {f}" for f in saved_files)
+            parsed_detail = "\n".join(f"  - {s}" for s in file_summaries) if file_summaries else "  (no parsed data)"
+            kpi_detail = "\n".join(f"  - {k}: {v}" for k, v in parsed_kpis.items()) if parsed_kpis else "  (none extracted)"
+
             task = Task(
                 account_id=account_id,
                 goal="Process inbound client data report",
@@ -200,12 +227,14 @@ def process_inbound_email(
                     f"Sender: {sender}\n"
                     f"Subject: {subject}\n"
                     f"Report period: {report_date}\n"
-                    f"Attachments saved:\n" + "\n".join(f"  - {f}" for f in saved_files)
+                    f"Attachments saved:\n{file_detail}\n"
+                    f"Parsed file data:\n{parsed_detail}\n"
+                    f"Extracted KPIs:\n{kpi_detail}"
                 ),
                 task_type="data_ingestion",
                 current_department="data",
                 priority=Priority.HIGH,
-                kpis={},
+                kpis=parsed_kpis,
                 status=TaskStatus.PENDING,
                 created_at=now_iso(),
             )
@@ -223,6 +252,8 @@ def process_inbound_email(
     return {
         "account_id": account_id,
         "saved_files": saved_files,
+        "parsed_kpis": parsed_kpis,
+        "file_summaries": file_summaries,
         "task_id": task_id,
         "status": "ok" if not errors else "partial",
         "errors": errors,
