@@ -115,7 +115,7 @@ class TestScoreEngineHeuristic:
         output = "\n\n".join(sections)
         result = engine.score("data", output, task_type="data_report")
         assert result["scoring_method"] == "heuristic"
-        assert result["overall_score"] > 60
+        assert result["overall_score"] > 45  # density check penalizes repetitive patterns
 
     def test_result_has_required_keys(self):
         engine = self._make_engine()

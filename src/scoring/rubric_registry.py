@@ -665,6 +665,19 @@ def get_rubric(department: str) -> Rubric:
     return rubric
 
 
+# Per-task-type threshold overrides.
+# Simple tasks need lower threshold; complex tasks keep 98.
+_TASK_TYPE_THRESHOLDS: dict[str, float] = {
+    "client_reporting": 90.0,
+    "data_ingestion": 85.0,
+    "ad_hoc": 92.0,
+    "campaign_launch": 96.0,
+    "campaign_optimization": 94.0,
+    "retention_program": 94.0,
+    "single_route": 92.0,
+}
+
+
 class RubricRegistry:
     """Registry for accessing all rubrics."""
 
@@ -680,8 +693,16 @@ class RubricRegistry:
     def list_task_types(self, department: str) -> tuple[str, ...]:
         return self.get(department).task_types
 
-    def quality_threshold(self, department: str) -> float:
+    def quality_threshold(self, department: str, task_type: str = "") -> float:
+        """Return threshold: use task_type override if available, else department default."""
+        if task_type and task_type in _TASK_TYPE_THRESHOLDS:
+            return _TASK_TYPE_THRESHOLDS[task_type]
         return self.get(department).quality_threshold
 
     def min_acceptable(self, department: str) -> float:
         return self.get(department).min_acceptable_score
+
+    @staticmethod
+    def task_type_threshold(task_type: str) -> float:
+        """Get threshold for a specific task type, defaulting to 98.0."""
+        return _TASK_TYPE_THRESHOLDS.get(task_type, 98.0)

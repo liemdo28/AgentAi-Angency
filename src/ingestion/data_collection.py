@@ -27,6 +27,9 @@ from src.tools.email_client import EmailClient, EmailMessage
 
 logger = logging.getLogger(__name__)
 
+# Deduplication: track processed email Message-IDs to prevent double-processing
+_processed_message_ids: set[str] = set()
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -145,6 +148,21 @@ def process_inbound_email(
     saved_files: list[str] = []
     task_id: Optional[str] = None
 
+    # ── 0. Deduplication check ────────────────────────────────────────
+    msg_obj_dedup = email.message_from_bytes(raw_bytes)
+    message_id = msg_obj_dedup.get("Message-ID", "").strip()
+    if message_id and message_id in _processed_message_ids:
+        logger.warning("Duplicate email detected (Message-ID: %s), skipping", message_id)
+        return {
+            "account_id": None,
+            "saved_files": [],
+            "parsed_kpis": {},
+            "file_summaries": [],
+            "task_id": None,
+            "status": "duplicate",
+            "errors": [f"Duplicate email: {message_id}"],
+        }
+
     # ── 1. Parse headers ──────────────────────────────────────────────
     parsed = parse_message(raw_bytes)
     sender = parsed.get("from", "")
@@ -248,6 +266,10 @@ def process_inbound_email(
             err = f"Failed to create data task: {exc}"
             logger.error(err)
             errors.append(err)
+
+    # Mark as processed for deduplication
+    if message_id:
+        _processed_message_ids.add(message_id)
 
     return {
         "account_id": account_id,

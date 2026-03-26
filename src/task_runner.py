@@ -86,14 +86,24 @@ def run_task_sync(task: Task, context: dict[str, Any] | None = None) -> dict[str
         retry_count = int(result_state.get("retry_count", task.retry_count))
 
         # ── 4. Map graph status to TaskStatus ───────────────────────────
-        if graph_status == "PASSED":
-            new_status = TaskStatus.PASSED
-        elif graph_status == "REVIEW_FAILED":
-            new_status = TaskStatus.ESCALATED
+        _STATUS_MAP = {
+            "PASSED": TaskStatus.PASSED,
+            "REVIEW_FAILED": TaskStatus.ESCALATED,
+            "FAILED": TaskStatus.FAILED,
+            "IN_PROGRESS": TaskStatus.FAILED,  # should not end in this state
+            "REVIEW": TaskStatus.FAILED,        # stuck in review = failure
+        }
+        if graph_status in _STATUS_MAP:
+            new_status = _STATUS_MAP[graph_status]
         elif errors:
             new_status = TaskStatus.FAILED
-        else:
+        elif final_output and score > 0:
             new_status = TaskStatus.DONE
+        else:
+            # Unknown status: treat as failure, not success
+            new_status = TaskStatus.FAILED
+            errors.append(f"Unexpected graph status: {graph_status}")
+            logger.warning("Task %s ended with unexpected status: %s", task.id, graph_status)
 
         # ── 5. Persist updated task ─────────────────────────────────────
         task.status = new_status
