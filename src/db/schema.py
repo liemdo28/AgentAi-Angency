@@ -130,6 +130,7 @@ CREATE TABLE IF NOT EXISTS review_history (
     feedback TEXT,
     breakdown_json TEXT DEFAULT '{}',
     retry_count INTEGER DEFAULT 0,
+    model_version TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now'))
 );
 

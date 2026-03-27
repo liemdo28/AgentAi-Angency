@@ -203,6 +203,7 @@ class RetryWithFeedback:
             feedback=decision.feedback,
             breakdown={},
             mode="retry_loop",
+            model_version="",
         )
 
         # Recurse with improved score

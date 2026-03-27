@@ -73,6 +73,7 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("DB init failed (non-fatal): %s", exc)
     engine.restore(store.load())
+    _recover_stuck_tasks()
     yield
 
 
@@ -257,6 +258,72 @@ def refresh_overdue():
          summary="Dashboard: handoff counts per state")
 def status():
     return engine.status()
+
+
+@app.get("/health", summary="System health check")
+def health_check():
+    """
+    Returns system health status including DB, task queue, and configuration.
+    Used for monitoring and deployment readiness checks.
+    """
+    import os
+    health: dict[str, Any] = {
+        "status": "ok",
+        "checks": {},
+    }
+
+    # DB check
+    try:
+        from src.db.connection import get_db, init_db
+        init_db()
+        get_db().execute("SELECT 1").fetchone()
+        health["checks"]["database"] = "ok"
+    except Exception as exc:
+        health["checks"]["database"] = f"error: {exc}"
+        health["status"] = "degraded"
+
+    # Task queue check (count pending/in-progress)
+    try:
+        from src.db.connection import get_db
+        from src.db.repositories.task_repo import TaskRepository
+        from src.tasks.models import TaskStatus
+        repo = TaskRepository()
+        pending = len(repo.list_by_status(TaskStatus.PENDING))
+        in_progress = len(repo.list_by_status(TaskStatus.IN_PROGRESS))
+        health["checks"]["task_queue"] = {
+            "pending": pending,
+            "in_progress": in_progress,
+        }
+    except Exception as exc:
+        health["checks"]["task_queue"] = f"error: {exc}"
+
+    # LLM config check
+    try:
+        from src.config.settings import SETTINGS
+        llm_provider = SETTINGS.LLM_PROVIDER
+        has_key = bool(
+            os.getenv("ANTHROPIC_API_KEY") or
+            os.getenv("OPENAI_API_KEY") or
+            os.getenv("OLLAMA_BASE_URL")
+        )
+        health["checks"]["llm"] = {
+            "provider": llm_provider,
+            "api_key_configured": has_key,
+        }
+    except Exception as exc:
+        health["checks"]["llm"] = f"error: {exc}"
+
+    # Email config check
+    try:
+        from src.config.settings import SETTINGS
+        health["checks"]["email"] = {
+            "smtp_configured": bool(SETTINGS.SMTP_HOST),
+            "sendgrid_configured": bool(os.getenv("SENDGRID_API_KEY")),
+        }
+    except Exception as exc:
+        health["checks"]["email"] = f"error: {exc}"
+
+    return health
 
 
 @app.get("/routes", summary="List all available department routes")
@@ -468,6 +535,29 @@ def _run_task_background(task_id: str) -> None:
     thread.start()
 
 
+def _recover_stuck_tasks() -> None:
+    """
+    On startup: re-enqueue any tasks left IN_PROGRESS from a previous crash.
+    This prevents tasks from being permanently stuck after server restart (RISK-008 durability).
+    """
+    try:
+        from src.db.connection import init_db
+        from src.db.repositories.task_repo import TaskRepository
+        from src.tasks.models import TaskStatus
+
+        init_db()
+        repo = TaskRepository()
+        stuck = repo.list_by_status(TaskStatus.IN_PROGRESS)
+        if stuck:
+            logger.warning(
+                "Startup recovery: found %d stuck IN_PROGRESS tasks, re-enqueueing", len(stuck)
+            )
+            for task in stuck:
+                _run_task_background(task.id)
+    except Exception as exc:
+        logger.warning("Startup task recovery failed (non-fatal): %s", exc)
+
+
 @app.post("/tasks/{task_id}/run",
           summary="Enqueue task through the LangGraph AI pipeline (returns 202, poll GET /tasks/{id})",
           status_code=202)
@@ -571,6 +661,69 @@ def cancel_task(task_id: str):
     except Exception as exc:
         logger.exception("cancel_task failed: %s", exc)
         raise HTTPException(500, detail="Unexpected error cancelling task.")
+
+
+@app.post("/tasks/{task_id}/approve-notification",
+          summary="Release a held notification email for human-approved tasks")
+def approve_notification(task_id: str):
+    """
+    Release an email notification that was held pending human approval (RISK-013).
+
+    Sets metadata.human_approved=True and re-runs the notification node.
+    The email body/subject are retrieved from the held notification stored in metadata.
+    """
+    try:
+        from src.db.connection import init_db
+        from src.db.repositories.task_repo import TaskRepository
+        from src.tasks.models import TaskStatus
+
+        init_db()
+        repo = TaskRepository()
+        task = repo.get(task_id)
+        if not task:
+            raise HTTPException(404, detail=f"Task not found: {task_id}")
+        if task.status not in (TaskStatus.PASSED, TaskStatus.DONE):
+            raise HTTPException(409, detail=f"Task must be PASSED/DONE to approve notification (current: {task.status.value if task.status else 'unknown'})")
+
+        # Read held notification from final_output_json metadata
+        held_meta = (task.final_output_json or {}).get("notification_held_meta", {})
+        to_email = held_meta.get("notification_to", "")
+        subject = held_meta.get("notification_subject", f"[Agency AI] Task {task_id} complete")
+        body = held_meta.get("notification_body", task.final_output_text or "")
+
+        if not to_email:
+            raise HTTPException(422, detail="No held notification found for this task. Was require_approval=True when it ran?")
+
+        # Send the held email
+        from src.tools.email_client import EmailClient, EmailMessage
+        client = EmailClient()
+        receipt = client.send(EmailMessage(to=to_email, subject=subject, body=body))
+        client.close()
+
+        # Log to audit trail
+        repo.add_audit_log(
+            actor="human_approver",
+            action_type="notification_approved",
+            entity_type="task",
+            entity_id=task_id,
+            details={"sent_to": to_email, "status": receipt.status},
+        )
+
+        return {
+            "task_id": task_id,
+            "notification_sent": receipt.status == "sent",
+            "sent_to": to_email,
+            "status": receipt.status,
+            "error": receipt.error,
+        }
+    except HTTPException:
+        raise
+    except sqlite3.OperationalError as exc:
+        logger.error("Database error in approve_notification: %s", exc)
+        raise HTTPException(503, detail="Database unavailable.")
+    except Exception as exc:
+        logger.exception("approve_notification failed: %s", exc)
+        raise HTTPException(500, detail=f"Unexpected error: {exc}")
 
 
 # ================================================================== #
