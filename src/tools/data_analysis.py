@@ -75,6 +75,58 @@ class DataAnalysisTool:
         logger.info(f"Data analysis complete for {list(results['datasets'].keys())}")
         return results
 
+    def load_file(self, path: str) -> dict[str, Any]:
+        """
+        Load a CSV or Excel file from disk and return structured analysis.
+
+        Returns a dict with keys:
+          path, rows, columns, numeric_columns, summary (per-column stats), sample_rows
+        On error, returns {"error": "<msg>", "path": path}.
+        """
+        import os
+
+        if not self._pandas_available:
+            return {"error": "pandas not available", "path": path}
+
+        if not os.path.isfile(path):
+            return {"error": f"File not found: {path}", "path": path}
+
+        import pandas as pd
+
+        ext = os.path.splitext(path)[1].lower()
+        try:
+            if ext == ".csv":
+                df = pd.read_csv(path)
+            elif ext in (".xlsx", ".xls"):
+                df = pd.read_excel(path)
+            else:
+                return {"error": f"Unsupported file type: {ext}", "path": path}
+
+            numeric_cols = df.select_dtypes(include="number").columns.tolist()
+            result: dict[str, Any] = {
+                "path": path,
+                "rows": len(df),
+                "columns": list(df.columns),
+                "numeric_columns": numeric_cols,
+                "summary": {},
+                "sample_rows": df.head(5).fillna("").to_dict(orient="records"),
+            }
+            for col in numeric_cols:
+                result["summary"][col] = {
+                    "sum": float(df[col].sum()),
+                    "mean": float(df[col].mean()),
+                    "min": float(df[col].min()),
+                    "max": float(df[col].max()),
+                }
+            logger.info(
+                "Loaded file %s: %d rows, %d numeric columns",
+                path, len(df), len(numeric_cols),
+            )
+            return result
+        except Exception as exc:
+            logger.error("Failed to load file %s: %s", path, exc)
+            return {"error": str(exc), "path": path}
+
     def compute_roi(
         self,
         revenue: list[float],

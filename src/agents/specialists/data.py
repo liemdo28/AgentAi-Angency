@@ -1,10 +1,15 @@
 """Data specialist — analytics, reporting, data analysis."""
 from __future__ import annotations
 
+import logging
+import os
 import re
 from datetime import datetime, timezone
+from typing import Any
 
 from src.agents.specialists.base import BaseSpecialist
+
+logger = logging.getLogger(__name__)
 
 
 class DataSpecialist(BaseSpecialist):
@@ -345,6 +350,122 @@ class DataSpecialist(BaseSpecialist):
             },
         ]
         return recs
+
+    # ── File-aware generate override ────────────────────────────────
+
+    def _extract_file_paths(self, state: dict[str, Any]) -> list[str]:
+        """Extract CSV/Excel file paths from task description and artifacts."""
+        paths: list[str] = []
+        task_desc = state.get("task_description", "")
+
+        # Match lines like "  - /path/to/file.csv" written by process_inbound_email
+        for match in re.finditer(
+            r"^\s*-\s+(\S+\.(?:csv|xlsx|xls))\s*$",
+            task_desc,
+            re.MULTILINE | re.IGNORECASE,
+        ):
+            candidate = match.group(1)
+            if os.path.isfile(candidate) and candidate not in paths:
+                paths.append(candidate)
+
+        # Also check artifacts / required_inputs
+        for val in (state.get("artifacts") or state.get("required_inputs") or {}).values():
+            if (
+                isinstance(val, str)
+                and val.lower().endswith((".csv", ".xlsx", ".xls"))
+                and os.path.isfile(val)
+                and val not in paths
+            ):
+                paths.append(val)
+
+        return paths
+
+    def _build_file_data_block(self, paths: list[str]) -> tuple[str, dict[str, Any]]:
+        """
+        Load each file with DataAnalysisTool and return:
+          - a human-readable summary block (for the LLM prompt)
+          - a flat KPI dict (to override default benchmark values)
+        """
+        from src.tools.data_analysis import DataAnalysisTool
+
+        tool = DataAnalysisTool()
+        kpi_overrides: dict[str, Any] = {}
+        summary_parts: list[str] = []
+
+        for path in paths:
+            analysis = tool.load_file(path)
+            fname = os.path.basename(path)
+
+            if "error" in analysis:
+                summary_parts.append(f"[{fname}] Load error: {analysis['error']}")
+                continue
+
+            rows = analysis.get("rows", 0)
+            cols = analysis.get("columns", [])
+            col_stats = analysis.get("summary", {})
+            sample = analysis.get("sample_rows", [])
+
+            lines = [f"[{fname}]  {rows} rows × {len(cols)} columns"]
+            for col, stats in list(col_stats.items())[:12]:
+                lines.append(
+                    f"  {col}: sum={stats['sum']:,.0f}  mean={stats['mean']:,.2f}"
+                    f"  min={stats['min']:,.0f}  max={stats['max']:,.0f}"
+                )
+            if sample:
+                lines.append(f"  Sample row 1: {sample[0]}")
+
+            summary_parts.append("\n".join(lines))
+
+            # Map column names → KPI keys
+            for col, stats in col_stats.items():
+                cl = col.lower()
+                total = stats["sum"]
+                avg = stats["mean"]
+                if "impression" in cl or "reach" in cl:
+                    kpi_overrides["impressions"] = f"{total:,.0f}"
+                elif "click" in cl and "cost" not in cl and "cpc" not in cl:
+                    kpi_overrides["clicks"] = f"{total:,.0f}"
+                elif cl in ("ctr", "click_through_rate"):
+                    kpi_overrides["ctr"] = f"{avg:.2f}%"
+                elif cl in ("cpc", "cost_per_click"):
+                    kpi_overrides["cpc"] = f"{avg:,.0f}"
+                elif "conver" in cl:
+                    kpi_overrides["conversions"] = f"{total:,.0f}"
+                elif cl in ("cpa", "cost_per_acquisition", "cost_per_action"):
+                    kpi_overrides["cpa"] = f"{avg:,.0f}"
+                elif cl in ("roas", "return_on_ad_spend"):
+                    kpi_overrides["roas"] = f"{avg:.1f}x"
+                elif "revenue" in cl or "doanh" in cl:
+                    kpi_overrides["revenue"] = f"{total:,.0f}"
+                elif "spend" in cl or ("cost" in cl and "per" not in cl):
+                    kpi_overrides["spend"] = f"{total:,.0f}"
+                elif "frequency" in cl:
+                    kpi_overrides["frequency"] = f"{avg:.1f}"
+
+        return "\n\n".join(summary_parts), kpi_overrides
+
+    def generate(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Override: load real attachment files before running the LLM pipeline."""
+        file_paths = self._extract_file_paths(state)
+
+        if file_paths:
+            logger.info("[data] Loading %d real file(s): %s", len(file_paths), file_paths)
+            file_block, kpi_overrides = self._build_file_data_block(file_paths)
+
+            # Enrich task description so the LLM sees real numbers
+            enriched_desc = (
+                state.get("task_description", "")
+                + "\n\n## REAL FILE DATA (from client attachments):\n"
+                + file_block
+            )
+
+            # Merge real KPIs into artifacts so fallback tables use actual values
+            artifacts = dict(state.get("artifacts") or state.get("required_inputs") or {})
+            artifacts.update(kpi_overrides)
+
+            state = {**state, "task_description": enriched_desc, "artifacts": artifacts}
+
+        return super().generate(state)
 
     # ── System prompt (original) ─────────────────────────────────────
 
