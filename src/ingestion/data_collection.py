@@ -27,6 +27,10 @@ from src.tools.email_client import EmailClient, EmailMessage
 
 logger = logging.getLogger(__name__)
 
+# Backward-compatible in-memory dedup cache used by legacy tests and
+# as a fast pre-check before persistent DB deduplication.
+_processed_message_ids: set[str] = set()
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -149,6 +153,20 @@ def process_inbound_email(
     msg_obj_dedup = email.message_from_bytes(raw_bytes)
     message_id = msg_obj_dedup.get("Message-ID", "").strip()
     if message_id:
+        if message_id in _processed_message_ids:
+            logger.warning(
+                "Duplicate email detected in-memory (Message-ID: %s), skipping",
+                message_id,
+            )
+            return {
+                "account_id": None,
+                "saved_files": [],
+                "parsed_kpis": {},
+                "file_summaries": [],
+                "task_id": None,
+                "status": "duplicate",
+                "errors": [f"Duplicate email: {message_id}"],
+            }
         try:
             from src.db.connection import get_db, init_db
             init_db()
@@ -277,7 +295,6 @@ def process_inbound_email(
     if message_id:
         try:
             from src.db.connection import get_db, init_db
-            from datetime import datetime, timezone
             init_db()
             db = get_db()
             db.execute(
@@ -290,6 +307,8 @@ def process_inbound_email(
             db.commit()
         except Exception as persist_exc:
             logger.warning("Failed to persist email dedup record: %s", persist_exc)
+        finally:
+            _processed_message_ids.add(message_id)
 
     return {
         "account_id": account_id,
