@@ -113,7 +113,7 @@ class ScoreEngine:
         response = llm.complete(
             prompt=prompt,
             system="You are a rigorous quality reviewer. Score honestly. Return ONLY valid JSON.",
-            temperature=0.1,
+            temperature=0.0,  # deterministic scoring (RISK-009)
             max_tokens=2048,
         )
 

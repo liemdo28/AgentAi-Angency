@@ -15,6 +15,25 @@ from src.utils.json_utils import extract_first_json_object
 logger = logging.getLogger(__name__)
 
 SCORE_THRESHOLD = SETTINGS.SCORE_THRESHOLD
+
+
+def _get_active_model_version() -> str:
+    """Return the active LLM model identifier for audit logging (RISK-011)."""
+    try:
+        llm = get_llm()
+        provider = llm.primary_provider
+        if provider is None:
+            return "heuristic"
+        name = type(provider).__name__.lower()
+        if "anthropic" in name:
+            return f"anthropic/{SETTINGS.ANTHROPIC_MODEL}"
+        if "openai" in name:
+            return f"openai/{SETTINGS.OPENAI_MODEL}"
+        if "ollama" in name:
+            return f"ollama/{SETTINGS.OLLAMA_MODEL}"
+        return name
+    except Exception:
+        return "unknown"
 MAX_RETRIES = SETTINGS.MAX_ROUTE_RETRIES
 
 
@@ -404,6 +423,7 @@ Evaluate the specialist output using the rubric and return ONLY JSON.
                 "scoring_method": scoring_method,
                 "decision_reason": decision_reason,
                 "failure_category": failure_category,
+                "model_version": _get_active_model_version(),  # RISK-011
             },
         ],
         "status": status,
