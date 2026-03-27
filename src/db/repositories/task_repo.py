@@ -144,15 +144,16 @@ class TaskRepository:
         feedback: str,
         breakdown: dict[str, float],
         mode: str = "llm",
+        model_version: str = "",
     ) -> None:
         """Append a review record to the review_history table."""
         import uuid
         db = get_db()
         db.execute(
             """INSERT INTO review_history
-               (id, task_id, step_name, score, threshold, decision, feedback, breakdown_json, mode)
+               (id, task_id, step_name, score, threshold, decision, feedback, breakdown_json, mode, model_version)
                VALUES (:id, :task_id, :step_name, :score, :threshold, :decision,
-                       :feedback, :breakdown_json, :mode)""",
+                       :feedback, :breakdown_json, :mode, :model_version)""",
             {
                 "id": str(uuid.uuid4()),
                 "task_id": task_id,
@@ -163,6 +164,7 @@ class TaskRepository:
                 "feedback": feedback,
                 "breakdown_json": json.dumps(breakdown),
                 "mode": mode,
+                "model_version": model_version,
             },
         )
         db.commit()
