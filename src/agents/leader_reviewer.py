@@ -15,6 +15,25 @@ from src.utils.json_utils import extract_first_json_object
 logger = logging.getLogger(__name__)
 
 SCORE_THRESHOLD = SETTINGS.SCORE_THRESHOLD
+
+
+def _get_active_model_version() -> str:
+    """Return the active LLM model identifier for audit logging (RISK-011)."""
+    try:
+        llm = get_llm()
+        provider = llm.primary_provider
+        if provider is None:
+            return "heuristic"
+        name = type(provider).__name__.lower()
+        if "anthropic" in name:
+            return f"anthropic/{SETTINGS.ANTHROPIC_MODEL}"
+        if "openai" in name:
+            return f"openai/{SETTINGS.OPENAI_MODEL}"
+        if "ollama" in name:
+            return f"ollama/{SETTINGS.OLLAMA_MODEL}"
+        return name
+    except Exception:
+        return "unknown"
 MAX_RETRIES = SETTINGS.MAX_ROUTE_RETRIES
 
 
@@ -368,12 +387,31 @@ Evaluate the specialist output using the rubric and return ONLY JSON.
         except Exception as esc_exc:
             logger.warning("Escalation trigger failed for task %s: %s", task_id, esc_exc)
 
+    # ── Failure classification ────────────────────────────────────────
+    # Classify WHY the output failed based on the weakest rubric criterion
+    failure_category = ""
+    if next_action != "passed" and breakdown:
+        sorted_criteria = sorted(
+            [(k, v) for k, v in breakdown.items() if isinstance(v, (int, float))],
+            key=lambda x: x[1],
+        )
+        if sorted_criteria:
+            weakest_criterion = sorted_criteria[0][0]
+            _CRITERION_TO_CATEGORY = {
+                "completeness": "missing_sections",
+                "accuracy": "factual_or_data_error",
+                "actionability": "too_vague_or_generic",
+                "professional_quality": "formatting_or_structure",
+            }
+            failure_category = _CRITERION_TO_CATEGORY.get(weakest_criterion, "unknown")
+
     return {
         **state,
         "leader_score": score,
         "leader_feedback": feedback,
         "quality_threshold": score_threshold,
         "quality_breakdown": breakdown,
+        "failure_category": failure_category,
         "review_history": [
             *state.get("review_history", []),
             {
@@ -384,6 +422,8 @@ Evaluate the specialist output using the rubric and return ONLY JSON.
                 "retry_count": retry_count,
                 "scoring_method": scoring_method,
                 "decision_reason": decision_reason,
+                "failure_category": failure_category,
+                "model_version": _get_active_model_version(),  # RISK-011
             },
         ],
         "status": status,

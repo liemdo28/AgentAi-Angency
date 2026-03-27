@@ -209,7 +209,7 @@ Return JSON only (no markdown):
         response = llm.complete(
             prompt=user_prompt,
             system=SYSTEM_PROMPT,
-            temperature=0.2,
+            temperature=0.0,  # deterministic routing (RISK-009)
             max_tokens=512,
         )
         parsed: dict[str, Any] = extract_first_json_object(response)

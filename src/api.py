@@ -41,7 +41,7 @@ import sqlite3
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
 
@@ -447,43 +447,70 @@ def get_task(task_id: str):
         raise HTTPException(500, detail="Unexpected error fetching task.")
 
 
-@app.post("/tasks/{task_id}/run", response_model=RunTaskResult,
-          summary="Run task through the LangGraph AI pipeline")
-def run_task(task_id: str):
+def _run_task_background(task_id: str) -> None:
+    """Execute run_task_sync in a background thread (RISK-008)."""
+    import threading
+    from src.db.connection import init_db
+    from src.db.repositories.task_repo import TaskRepository
+    from src.task_runner import run_task_sync
+
+    def _worker():
+        try:
+            init_db()
+            repo = TaskRepository()
+            task = repo.get(task_id)
+            if task:
+                run_task_sync(task)
+        except Exception as exc:
+            logger.exception("Background task %s failed: %s", task_id, exc)
+
+    thread = threading.Thread(target=_worker, daemon=True, name=f"task-{task_id}")
+    thread.start()
+
+
+@app.post("/tasks/{task_id}/run",
+          summary="Enqueue task through the LangGraph AI pipeline (returns 202, poll GET /tasks/{id})",
+          status_code=202)
+def run_task(task_id: str, background_tasks: BackgroundTasks):
+    """
+    Enqueue a task for async execution (RISK-008: non-blocking API).
+
+    Returns 202 Accepted immediately. Poll GET /tasks/{task_id} for status.
+    Status transitions: PENDING → IN_PROGRESS → PASSED | FAILED | ESCALATED
+    """
     try:
         from src.db.connection import init_db
         from src.db.repositories.task_repo import TaskRepository
-        from src.task_runner import run_task_sync
+        from src.tasks.models import TaskStatus, now_iso
 
         init_db()
         repo = TaskRepository()
         task = repo.get(task_id)
         if not task:
             raise HTTPException(404, detail=f"Task not found: {task_id}")
+        if task.status and task.status.value == "IN_PROGRESS":
+            raise HTTPException(409, detail=f"Task {task_id} is already running.")
 
-        result = run_task_sync(task)
-        return RunTaskResult(
-            task_id=result["task_id"],
-            status=result["status"],
-            score=result["score"],
-            final_output=result["final_output"],
-            retry_count=result["retry_count"],
-            errors=result["errors"],
-        )
+        # Mark as IN_PROGRESS immediately so caller knows it's queued
+        task.status = TaskStatus.IN_PROGRESS
+        task.started_at = now_iso()
+        repo.upsert(task)
+
+        background_tasks.add_task(_run_task_background, task_id)
+
+        return {
+            "task_id": task_id,
+            "status": "IN_PROGRESS",
+            "message": "Task queued. Poll GET /tasks/{task_id} for results.",
+        }
     except HTTPException:
         raise
-    except ValueError as exc:
-        raise HTTPException(400, detail=f"Invalid task or parameter: {exc}")
-    except RuntimeError as exc:
-        # Raised by task_runner / graph when LLM chain fails end-to-end
-        logger.error("Task execution RuntimeError: %s", exc)
-        raise HTTPException(422, detail=f"Task execution failed: {exc}")
     except sqlite3.OperationalError as exc:
         logger.error("Database error in run_task: %s", exc)
         raise HTTPException(503, detail="Database unavailable.")
     except Exception as exc:
-        logger.exception("run_task failed: %s", exc)
-        raise HTTPException(500, detail=f"Unexpected error running task: {exc}")
+        logger.exception("run_task enqueue failed: %s", exc)
+        raise HTTPException(500, detail=f"Unexpected error enqueuing task: {exc}")
 
 
 @app.get("/tasks/{task_id}/review-history",

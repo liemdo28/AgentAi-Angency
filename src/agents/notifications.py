@@ -61,6 +61,28 @@ def send_notification(state: AgenticState) -> AgenticState:
 
     body = "\n".join(body_lines)
 
+    # ── RISK-013: Approval gate — never auto-send without explicit approval ──
+    require_approval = metadata.get("require_approval", True)
+    human_approved = metadata.get("human_approved", False)
+
+    if require_approval and not human_approved:
+        logger.info(
+            "[EMAIL] Notification HELD for task %s — require_approval=True, "
+            "human_approved=False. Set metadata.human_approved=True to release.",
+            task_id,
+        )
+        return {
+            **state,
+            "email_sent": False,
+            "metadata": {
+                **metadata,
+                "notification_held": True,
+                "notification_subject": subject,
+                "notification_body": body,
+                "notification_to": stakeholder_email,
+            },
+        }
+
     # Try real email send
     email_sent = _try_send_email(
         to=stakeholder_email,
