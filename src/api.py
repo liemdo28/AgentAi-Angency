@@ -300,14 +300,12 @@ def health_check():
     # LLM config check
     try:
         from src.config.settings import SETTINGS
-        llm_provider = SETTINGS.LLM_PROVIDER
-        has_key = bool(
-            os.getenv("ANTHROPIC_API_KEY") or
-            os.getenv("OPENAI_API_KEY") or
-            os.getenv("OLLAMA_BASE_URL")
-        )
+        provider_order = SETTINGS.LLM_PROVIDER_ORDER  # e.g. ["anthropic", "openai", "ollama"]
+        active_providers = [p for p in provider_order if SETTINGS.is_provider_available(p)]
+        has_key = bool(active_providers)
         health["checks"]["llm"] = {
-            "provider": llm_provider,
+            "provider_order": provider_order,
+            "active_providers": active_providers,
             "api_key_configured": has_key,
         }
     except Exception as exc:
