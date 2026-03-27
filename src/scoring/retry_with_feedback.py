@@ -129,6 +129,9 @@ class RetryWithFeedback:
         """
         Full retry loop: decide -> inject feedback -> re-run specialist -> re-score.
 
+        Includes score regression detection: if retry scores worse or equal,
+        stop immediately and escalate (wasting LLM calls on declining quality).
+
         Returns: (new_output, new_score, decision)
 
         Raises: RuntimeError if specialist_fn fails after all retries.
@@ -163,6 +166,29 @@ class RetryWithFeedback:
         result = self._engine.score(department, new_output, task.task_type)
         new_score = result.get("overall_score", 0.0)
 
+        # ── Score regression detection ────────────────────────────────
+        # If retry didn't improve, stop wasting LLM calls
+        if new_score <= score:
+            logger.warning(
+                "Task %s: score regression (%.1f -> %.1f) at attempt %d — escalating",
+                task.id, score, new_score, decision.attempt,
+            )
+            task.retry_count = decision.attempt
+            task.score = max(score, new_score)  # keep the better score
+            self._repo.update(task)
+            return (
+                output if score >= new_score else new_output,
+                max(score, new_score),
+                RetryDecision(
+                    should_retry=False,
+                    reason=f"Score regression: {score:.1f} -> {new_score:.1f}, no improvement",
+                    feedback="",
+                    attempt=decision.attempt,
+                    new_score=max(score, new_score),
+                    final_decision="escalate",
+                ),
+            )
+
         # Update task
         task.retry_count = decision.attempt
         task.score = new_score
@@ -179,7 +205,7 @@ class RetryWithFeedback:
             mode="retry_loop",
         )
 
-        # Recurse
+        # Recurse with improved score
         return self.execute_retry(task, department, specialist_fn, new_output, new_score)
 
     def _build_feedback(

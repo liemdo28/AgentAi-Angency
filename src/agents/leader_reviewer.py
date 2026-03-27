@@ -368,12 +368,31 @@ Evaluate the specialist output using the rubric and return ONLY JSON.
         except Exception as esc_exc:
             logger.warning("Escalation trigger failed for task %s: %s", task_id, esc_exc)
 
+    # ── Failure classification ────────────────────────────────────────
+    # Classify WHY the output failed based on the weakest rubric criterion
+    failure_category = ""
+    if next_action != "passed" and breakdown:
+        sorted_criteria = sorted(
+            [(k, v) for k, v in breakdown.items() if isinstance(v, (int, float))],
+            key=lambda x: x[1],
+        )
+        if sorted_criteria:
+            weakest_criterion = sorted_criteria[0][0]
+            _CRITERION_TO_CATEGORY = {
+                "completeness": "missing_sections",
+                "accuracy": "factual_or_data_error",
+                "actionability": "too_vague_or_generic",
+                "professional_quality": "formatting_or_structure",
+            }
+            failure_category = _CRITERION_TO_CATEGORY.get(weakest_criterion, "unknown")
+
     return {
         **state,
         "leader_score": score,
         "leader_feedback": feedback,
         "quality_threshold": score_threshold,
         "quality_breakdown": breakdown,
+        "failure_category": failure_category,
         "review_history": [
             *state.get("review_history", []),
             {
@@ -384,6 +403,7 @@ Evaluate the specialist output using the rubric and return ONLY JSON.
                 "retry_count": retry_count,
                 "scoring_method": scoring_method,
                 "decision_reason": decision_reason,
+                "failure_category": failure_category,
             },
         ],
         "status": status,
