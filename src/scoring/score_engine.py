@@ -113,7 +113,7 @@ class ScoreEngine:
         response = llm.complete(
             prompt=prompt,
             system="You are a rigorous quality reviewer. Score honestly. Return ONLY valid JSON.",
-            temperature=0.1,
+            temperature=0.0,  # deterministic scoring (RISK-009)
             max_tokens=2048,
         )
 
@@ -147,41 +147,67 @@ class ScoreEngine:
         """
         Fallback scoring without LLM.
         Uses structural heuristics: line count, section presence, formatting.
+        Also checks content density to penalize formatted garbage.
         """
         text = output or ""
         lines = text.strip().split("\n")
         line_count = len(lines)
-        word_count = len(text.split())
+        words = text.split()
+        word_count = len(words)
+
+        # ── Content density check (anti-garbage) ──────────────────────
+        # Low unique-word ratio indicates repetitive/filler text
+        unique_words = set(w.lower().strip(".,;:!?()[]{}\"'") for w in words if len(w) > 2)
+        unique_ratio = len(unique_words) / max(word_count, 1)
+        is_low_density = unique_ratio < 0.20 and word_count > 50  # <20% unique = likely garbage
+
+        # Check if rubric checklist keywords appear in output
+        checklist_keywords = set()
+        for c in rubric.criteria:
+            for item in c.checklist:
+                # Extract meaningful words from checklist items
+                for word in item.lower().split():
+                    if len(word) > 4:
+                        checklist_keywords.add(word)
+        text_lower = text.lower()
+        keyword_hits = sum(1 for kw in checklist_keywords if kw in text_lower)
+        keyword_coverage = keyword_hits / max(len(checklist_keywords), 1)
 
         # Check for section headers (markdown or numbered)
         section_markers = ["##", "###", "**", "1.", "2.", "3.", "4.", "5."]
         sections_found = sum(1 for m in section_markers if m in text)
 
-        # Score each criterion heuristically
+        # ── Score each criterion heuristically ────────────────────────
         scores: dict[str, dict[str, Any]] = {}
 
-        # Completeness: based on length + section coverage
+        # Completeness: based on length + section coverage + checklist keyword presence
         if line_count >= 30 and sections_found >= 4:
             completeness_score = 85.0
         elif line_count >= 15 and sections_found >= 2:
             completeness_score = 65.0
         else:
             completeness_score = 40.0
+        # Bonus/penalty for checklist keyword coverage
+        completeness_score += keyword_coverage * 10  # up to +10 for matching rubric keywords
+        if is_low_density:
+            completeness_score -= 20  # penalize filler text
+        completeness_score = max(0.0, min(100.0, completeness_score))
         scores["completeness"] = {
             "score": completeness_score,
-            "notes": f"Lines={line_count}, sections={sections_found}",
+            "notes": f"Lines={line_count}, sections={sections_found}, keyword_coverage={keyword_coverage:.0%}, density={'LOW' if is_low_density else 'ok'}",
         }
 
         # Accuracy: structural consistency
-        # Check for contradictory markers (e.g., "not" + bullet, "increase" in one section and "decrease" in another)
         accuracy_score = 75.0  # neutral default
         if "TBD" in text or "[INSERT" in text or "..." in text:
             accuracy_score -= 15
         if "%" in text and "$" in text:
             accuracy_score += 5  # concrete figures
+        if is_low_density:
+            accuracy_score -= 15  # repetitive text likely inaccurate
         scores["accuracy"] = {
             "score": max(0.0, min(100.0, accuracy_score)),
-            "notes": "Heuristic: format consistency + placeholder check",
+            "notes": f"Heuristic: format consistency + placeholder check, density={'LOW' if is_low_density else 'ok'}",
         }
 
         # Actionability: presence of numbers, dates, names (specificity markers)
@@ -193,6 +219,9 @@ class ScoreEngine:
             actionability_score = 60.0
         else:
             actionability_score = 45.0
+        if is_low_density:
+            actionability_score -= 15
+        actionability_score = max(0.0, min(100.0, actionability_score))
         scores["actionability"] = {
             "score": actionability_score,
             "notes": f"Concrete detail markers: {specificity}/10",
@@ -206,9 +235,12 @@ class ScoreEngine:
             professional_score += 5
         if text.count("\n\n") > 3:
             professional_score += 5
+        if is_low_density:
+            professional_score -= 15
+        professional_score = max(0.0, min(100.0, professional_score))
         scores["professional_quality"] = {
-            "score": min(100.0, professional_score),
-            "notes": "Heuristic: formatting and structure assessment",
+            "score": professional_score,
+            "notes": f"Heuristic: formatting + structure, density={'LOW' if is_low_density else 'ok'}",
         }
 
         breakdown = {k: v["score"] for k, v in scores.items()}
