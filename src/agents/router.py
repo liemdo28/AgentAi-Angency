@@ -91,9 +91,9 @@ def _score_policy(task_desc: str, policy) -> int:
 
 def _heuristic_route(state: AgenticState) -> AgenticState:
     """Fallback routing using keyword scoring when LLM is unavailable."""
-    task_desc = state.get("task_description", "")
-    specified_from = state.get("from_department", "").strip().lower()
-    specified_to = state.get("to_department", "").strip().lower()
+    task_desc = state.get("task_description", "") or ""
+    specified_from = (state.get("from_department") or "").strip().lower()
+    specified_to = (state.get("to_department") or "").strip().lower()
 
     # If both departments are explicitly provided, use them directly
     if specified_from and specified_to:

@@ -8,9 +8,15 @@ Also includes a data collection email workflow: agency sends report requests →
 ```bash
 python3 -m pip install -r requirements.txt
 ```
+## Windows Desktop App
+
+Chạy giao diện desktop (Tkinter, tối ưu bố cục từ 720p đến 4K):
+
+```bash
+python src/windows_app.py
+```
 
 ## Run tests
-
 ```bash
 PYTHONPATH=.:src python3 -m pytest tests/ -v
 ```

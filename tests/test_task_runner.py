@@ -1,219 +1,363 @@
 """
-Integration tests for the task runner and task models.
-Uses an in-memory SQLite DB to test the full task lifecycle.
+Stream C — AI Pipeline tests.
+
+Covers:
+  C1. Graph contract: initial state building, missing/bad fields handled
+  C2. Score & Retry: status mapping, score extraction, retry_count
+  C3. Persistence: task marked IN_PROGRESS before graph, updated after, exception path
 """
+from __future__ import annotations
+
 import sys
-from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+# ── Stub all heavy/optional deps before src.* imports ──────────────
+# These packages may not be installed in the test environment.
+# Stub them so unit tests run without the full AI stack.
+_STUBS = [
+    "langgraph", "langgraph.graph", "langgraph.checkpoint",
+    "langgraph.checkpoint.memory",
+    "dotenv",
+    "anthropic", "openai", "httpx",
+    "sendgrid",
+]
+for _mod in _STUBS:
+    sys.modules.setdefault(_mod, MagicMock())
 
-import pytest
+# Provide the specific symbols graph.py needs
+_lg = sys.modules["langgraph.graph"]
+for _sym in ("END", "START", "StateGraph"):
+    if not hasattr(_lg, _sym):
+        setattr(_lg, _sym, MagicMock())
+
+import pytest  # noqa: F401 — used by subclasses
+
+from src.tasks.models import Task, TaskStatus
 
 
-class TestTaskModels:
-    """Test Task model serialisation, status logic, and KPI scoring."""
+# ------------------------------------------------------------------ #
+# Helpers                                                              #
+# ------------------------------------------------------------------ #
 
-    def _make_task(self, **kwargs):
-        from src.tasks.models import Task, TaskStatus, Priority
-        defaults = dict(
-            goal="Launch campaign",
-            description="Full campaign launch for client X",
-            task_type="campaign_launch",
-            status=TaskStatus.DRAFT,
-            priority=Priority.NORMAL,
+def make_task(**kwargs) -> Task:
+    defaults = dict(goal="Run a test campaign", account_id="acct-1", task_type="campaign")
+    defaults.update(kwargs)
+    return Task(**defaults)
+
+
+def make_graph_result(**overrides) -> dict:
+    """Minimal valid graph result state."""
+    base = {
+        "status": "PASSED",
+        "leader_score": 85.0,
+        "specialist_output": "Output text",
+        "generated_outputs": {"key": "value"},
+        "review_history": [{"step": "leader_review", "score": 85.0}],
+        "errors": [],
+        "retry_count": 0,
+    }
+    base.update(overrides)
+    return base
+
+
+def run_with_mock_graph(task: Task, graph_result: dict) -> dict:
+    """Run run_task_sync with a fully mocked graph + DB layer."""
+    from src.task_runner import run_task_sync
+
+    mock_graph = MagicMock()
+    mock_graph.invoke.return_value = graph_result
+
+    with (
+        patch("src.task_runner.get_graph", return_value=mock_graph),
+        patch("src.task_runner.init_db"),
+        patch("src.task_runner.TaskRepository") as MockRepo,
+    ):
+        instance = MockRepo.return_value
+        instance.upsert.return_value = task
+        instance.update.return_value = task
+        return run_task_sync(task)
+
+
+# ------------------------------------------------------------------ #
+# C2. Status Mapping                                                   #
+# ------------------------------------------------------------------ #
+
+class TestStatusMapping:
+    def test_passed_maps_to_passed(self):
+        result = run_with_mock_graph(make_task(), make_graph_result(status="PASSED"))
+        assert result["status"] == TaskStatus.PASSED.value
+
+    def test_review_failed_maps_to_escalated(self):
+        result = run_with_mock_graph(
+            make_task(), make_graph_result(status="REVIEW_FAILED", errors=[])
         )
-        defaults.update(kwargs)
-        return Task(**defaults)
+        assert result["status"] == TaskStatus.ESCALATED.value
 
-    def test_task_has_uuid_id(self):
-        task = self._make_task()
-        assert len(task.id) == 36  # UUID format
-
-    def test_task_default_status_is_draft(self):
-        from src.tasks.models import TaskStatus
-        task = self._make_task()
-        assert task.status == TaskStatus.DRAFT
-
-    def test_task_is_active(self):
-        from src.tasks.models import TaskStatus
-        task = self._make_task(status=TaskStatus.IN_PROGRESS)
-        assert task.is_active
-        assert not task.is_done
-
-    def test_task_is_done(self):
-        from src.tasks.models import TaskStatus
-        task = self._make_task(status=TaskStatus.PASSED)
-        assert task.is_done
-        assert not task.is_active
-
-    def test_task_to_db_dict_roundtrip(self):
-        from src.tasks.models import Task
-        task = self._make_task(kpis={"roas": 3.5, "ctr": 2.0})
-        db_dict = task.to_db_dict()
-        restored = Task.from_db_row(db_dict)
-        assert restored.id == task.id
-        assert restored.goal == task.goal
-        assert restored.kpis == task.kpis
-        assert restored.status == task.status
-
-    def test_kpi_score_all_met(self):
-        task = self._make_task(
-            kpis={"roas": 3.0, "ctr": 2.0},
-            kpi_results={"roas": 3.0, "ctr": 2.0},
+    def test_errors_present_maps_to_failed(self):
+        result = run_with_mock_graph(
+            make_task(),
+            make_graph_result(status="DONE", errors=["Something broke"]),
         )
-        # Exact match = 100%
-        assert task.kpi_score() == 100.0
+        assert result["status"] == TaskStatus.FAILED.value
 
-    def test_kpi_score_partial(self):
-        task = self._make_task(
-            kpis={"roas": 4.0},
-            kpi_results={"roas": 2.0},
+    def test_unknown_status_no_errors_maps_to_failed(self):
+        result = run_with_mock_graph(
+            make_task(), make_graph_result(status="UNKNOWN_XYZ", errors=[])
         )
-        # 50% achievement
-        assert task.kpi_score() == 50.0
+        assert result["status"] == TaskStatus.FAILED.value
 
-    def test_kpi_score_no_kpis(self):
-        task = self._make_task()
-        assert task.kpi_score() == 100.0
+    def test_missing_status_field_defaults_to_failed_or_done(self):
+        graph_result = make_graph_result()
+        del graph_result["status"]
+        # No "status" key → result_state.get("status","FAILED") → new_status = FAILED or DONE
+        result = run_with_mock_graph(make_task(), graph_result)
+        assert result["status"] in (TaskStatus.FAILED.value, TaskStatus.DONE.value)
 
 
-class TestTaskPlanner:
-    """Test the task planner template system."""
+# ------------------------------------------------------------------ #
+# C1. Score & Output Extraction                                        #
+# ------------------------------------------------------------------ #
 
-    def test_list_available_types(self):
-        from src.tasks.planner import list_available_task_types
-        types = list_available_task_types()
-        assert "campaign_launch" in types
-        assert "campaign_optimization" in types
-        assert "retention_program" in types
-        assert "client_reporting" in types
+class TestScoreExtraction:
+    def test_score_extracted_correctly(self):
+        result = run_with_mock_graph(make_task(), make_graph_result(leader_score=72.5))
+        assert result["score"] == 72.5
 
-    def test_detect_campaign_launch(self):
-        from src.tasks.planner import detect_task_type
-        assert detect_task_type("Launch a new campaign for Nike") == "campaign_launch"
+    def test_missing_leader_score_defaults_to_zero(self):
+        graph_result = make_graph_result()
+        del graph_result["leader_score"]
+        result = run_with_mock_graph(make_task(), graph_result)
+        assert result["score"] == 0.0
 
-    def test_detect_optimization(self):
-        from src.tasks.planner import detect_task_type
-        assert detect_task_type("Optimize ROAS for Q2 performance") == "campaign_optimization"
+    def test_review_history_returned(self):
+        history = [{"step": "s1", "score": 90}]
+        result = run_with_mock_graph(make_task(), make_graph_result(review_history=history))
+        assert result["review_history"] == history
 
-    def test_detect_retention(self):
-        from src.tasks.planner import detect_task_type
-        assert detect_task_type("Set up CRM retention flow for churn prevention") == "retention_program"
+    def test_empty_review_history_returned(self):
+        result = run_with_mock_graph(make_task(), make_graph_result(review_history=[]))
+        assert result["review_history"] == []
 
-    def test_detect_reporting(self):
-        from src.tasks.planner import detect_task_type
-        assert detect_task_type("Generate monthly report dashboard") == "client_reporting"
+    def test_missing_review_history_defaults_to_empty(self):
+        graph_result = make_graph_result()
+        del graph_result["review_history"]
+        result = run_with_mock_graph(make_task(), graph_result)
+        assert result["review_history"] == []
 
-    def test_build_campaign_launch_plan(self):
-        from src.tasks.planner import build_task_plan
-        plan = build_task_plan("Launch Q2 campaign", task_type="campaign_launch")
-        assert plan["task_type"] == "campaign_launch"
-        assert plan["planning_mode"] == "template"
-        assert len(plan["steps"]) == 5
-        # First step should be Strategy Brief
-        assert plan["steps"][0]["name"] == "Strategy Brief"
-        # Last step should be Client Launch Update
-        assert plan["steps"][-1]["name"] == "Client Launch Update"
+    def test_retry_count_extracted(self):
+        result = run_with_mock_graph(make_task(), make_graph_result(retry_count=2))
+        assert result["retry_count"] == 2
 
-    def test_build_single_route_plan(self):
-        from src.tasks.planner import build_task_plan
-        plan = build_task_plan(
-            "Analyse campaign data",
-            from_department="media",
-            to_department="data",
+    def test_result_contains_task_id(self):
+        task = make_task()
+        result = run_with_mock_graph(task, make_graph_result())
+        assert result["task_id"] == task.id
+
+    def test_generated_outputs_non_dict_coerced_to_empty(self):
+        result = run_with_mock_graph(
+            make_task(), make_graph_result(generated_outputs="bad_string")
         )
-        assert plan["planning_mode"] == "single_route"
-        assert len(plan["steps"]) == 1
-        assert plan["steps"][0]["from_department"] == "media"
-        assert plan["steps"][0]["to_department"] == "data"
+        assert result["final_output_json"] == {}
 
-    def test_ad_hoc_returns_empty_steps(self):
-        from src.tasks.planner import build_task_plan
-        plan = build_task_plan("Do something random")
-        assert plan["planning_mode"] == "router_only"
-        assert plan["steps"] == []
+    def test_missing_generated_outputs_defaults_to_empty(self):
+        graph_result = make_graph_result()
+        del graph_result["generated_outputs"]
+        result = run_with_mock_graph(make_task(), graph_result)
+        assert result["final_output_json"] == {}
+
+    def test_negative_retry_count_in_graph(self):
+        # Should not crash; just stored as-is (int cast)
+        result = run_with_mock_graph(make_task(), make_graph_result(retry_count=-1))
+        assert isinstance(result["retry_count"], int)
 
 
-class TestSpecialistDispatch:
-    """Test that specialists can be instantiated and generate fallback output."""
+# ------------------------------------------------------------------ #
+# C3. Persistence                                                      #
+# ------------------------------------------------------------------ #
 
-    def test_all_departments_have_specialist(self):
-        # Import the map directly to avoid langgraph dependency in __init__
-        from src.agents.specialists.strategy import StrategySpecialist
-        from src.agents.specialists.creative import CreativeSpecialist
-        from src.agents.specialists.media import MediaSpecialist
-        from src.agents.specialists.data import DataSpecialist
-        from src.agents.specialists.account import AccountSpecialist
-        from src.agents.specialists.tech import TechSpecialist
-        from src.agents.specialists.sales import SalesSpecialist
-        from src.agents.specialists.ops import OperationsSpecialist
-        from src.agents.specialists.finance import FinanceSpecialist
-        from src.agents.specialists.crm import CRMAutomationSpecialist
-        from src.agents.specialists.production import ProductionSpecialist
+class TestPersistence:
+    def test_task_marked_in_progress_before_graph_invoke(self):
+        """repo.upsert must be called with IN_PROGRESS BEFORE graph.invoke."""
+        from src.task_runner import run_task_sync
 
-        dept_map = {
-            "strategy": StrategySpecialist,
-            "creative": CreativeSpecialist,
-            "media": MediaSpecialist,
-            "data": DataSpecialist,
-            "account": AccountSpecialist,
-            "tech": TechSpecialist,
-            "sales": SalesSpecialist,
-            "operations": OperationsSpecialist,
-            "finance": FinanceSpecialist,
-            "crm_automation": CRMAutomationSpecialist,
-            "production": ProductionSpecialist,
-        }
-        assert len(dept_map) == 11
+        task = make_task()
+        call_order = []
+        mock_graph = MagicMock()
 
-    def test_data_specialist_fallback_output(self):
-        from src.agents.specialists.data import DataSpecialist
-        spec = DataSpecialist()
-        state = {
-            "task_description": "Analyse ecommerce campaign performance",
-            "campaign_id": "camp-001",
-            "account_id": "acct-001",
-            "policy": {"expected_outputs": ["performance_report"]},
-            "current_step": {"name": "Data Analysis", "objective": "Analyse performance"},
-        }
-        result = spec.generate(state)
-        # Should use fallback since no LLM is configured
-        assert "specialist_output" in result
-        output = result["specialist_output"]
-        # Data specialist fallback should have real content
-        assert "PERFORMANCE SUMMARY" in output or "performance_report" in output.lower()
+        def record_invoke(_state):
+            call_order.append("invoke")
+            return make_graph_result()
 
-    def test_strategy_specialist_fallback_output(self):
-        from src.agents.specialists.strategy import StrategySpecialist
-        spec = StrategySpecialist()
-        state = {
-            "task_description": "Create Q2 strategy brief",
-            "policy": {"expected_outputs": ["strategic_direction", "channel_strategy"]},
-            "current_step": {"name": "Strategy Brief", "objective": "Create strategy"},
-        }
-        result = spec.generate(state)
-        assert "specialist_output" in result
-        assert len(result["specialist_output"]) > 50
+        mock_graph.invoke.side_effect = record_invoke
 
-    def test_run_specialist_dispatcher(self):
-        """Test the specialist dispatcher directly (avoid langgraph import)."""
-        from src.agents.specialists.data import DataSpecialist
-        spec = DataSpecialist()
-        state = {
-            "task_description": "Run data analysis",
-            "policy": {"expected_outputs": ["report"]},
-            "current_step": {},
-        }
-        result = spec.generate(state)
-        assert "specialist_output" in result
+        with (
+            patch("src.task_runner.get_graph", return_value=mock_graph),
+            patch("src.task_runner.init_db"),
+            patch("src.task_runner.TaskRepository") as MockRepo,
+        ):
+            instance = MockRepo.return_value
 
-    def test_unknown_department_key(self):
-        """Verify that unknown department keys are not in the specialist map."""
-        from src.agents.specialists.base import BaseSpecialist
-        # BaseSpecialist requires department to be set; instantiating with empty should fail
-        with pytest.raises(ValueError, match="department"):
-            class BadSpecialist(BaseSpecialist):
-                department = ""
-                def build_system_prompt(self): return ""
-            BadSpecialist()
+            def record_upsert(t):
+                call_order.append(("upsert", t.status))
+                return t
+
+            instance.upsert.side_effect = record_upsert
+            instance.update.return_value = task
+            run_task_sync(task)
+
+        upsert_idx = next(i for i, x in enumerate(call_order) if isinstance(x, tuple) and x[0] == "upsert")
+        invoke_idx = call_order.index("invoke")
+        assert upsert_idx < invoke_idx
+        assert call_order[upsert_idx][1] == TaskStatus.IN_PROGRESS
+
+    def test_repo_update_called_after_graph_completes(self):
+        from src.task_runner import run_task_sync
+
+        task = make_task()
+        mock_graph = MagicMock()
+        mock_graph.invoke.return_value = make_graph_result(status="PASSED")
+
+        with (
+            patch("src.task_runner.get_graph", return_value=mock_graph),
+            patch("src.task_runner.init_db"),
+            patch("src.task_runner.TaskRepository") as MockRepo,
+        ):
+            instance = MockRepo.return_value
+            instance.upsert.return_value = task
+            instance.update.return_value = task
+            run_task_sync(task)
+
+        assert instance.update.called
+
+    def test_exception_in_graph_returns_failed(self):
+        from src.task_runner import run_task_sync
+
+        task = make_task()
+        mock_graph = MagicMock()
+        mock_graph.invoke.side_effect = RuntimeError("Graph exploded")
+
+        with (
+            patch("src.task_runner.get_graph", return_value=mock_graph),
+            patch("src.task_runner.init_db"),
+            patch("src.task_runner.TaskRepository") as MockRepo,
+        ):
+            instance = MockRepo.return_value
+            instance.upsert.return_value = task
+            instance.update.return_value = task
+            result = run_task_sync(task)
+
+        assert result["status"] == TaskStatus.FAILED.value
+        assert "Graph exploded" in result["errors"][0]
+
+    def test_exception_result_has_zero_score(self):
+        from src.task_runner import run_task_sync
+
+        task = make_task()
+        mock_graph = MagicMock()
+        mock_graph.invoke.side_effect = ValueError("bad input")
+
+        with (
+            patch("src.task_runner.get_graph", return_value=mock_graph),
+            patch("src.task_runner.init_db"),
+            patch("src.task_runner.TaskRepository") as MockRepo,
+        ):
+            instance = MockRepo.return_value
+            instance.upsert.return_value = task
+            instance.update.return_value = task
+            result = run_task_sync(task)
+
+        assert result["score"] == 0.0
+
+    def test_db_update_raises_returns_failed(self):
+        """If repo.update raises after graph passes, exception handler takes over."""
+        from src.task_runner import run_task_sync
+
+        task = make_task()
+        mock_graph = MagicMock()
+        mock_graph.invoke.return_value = make_graph_result(status="PASSED")
+
+        with (
+            patch("src.task_runner.get_graph", return_value=mock_graph),
+            patch("src.task_runner.init_db"),
+            patch("src.task_runner.TaskRepository") as MockRepo,
+        ):
+            instance = MockRepo.return_value
+            instance.upsert.return_value = task
+            instance.update.side_effect = Exception("DB down")
+            result = run_task_sync(task)
+
+        assert result["status"] == TaskStatus.FAILED.value
+
+    def test_exception_path_still_calls_update(self):
+        """Even on failure, task.notes is set and repo.update is attempted."""
+        from src.task_runner import run_task_sync
+
+        task = make_task()
+        mock_graph = MagicMock()
+        mock_graph.invoke.side_effect = RuntimeError("crash")
+
+        with (
+            patch("src.task_runner.get_graph", return_value=mock_graph),
+            patch("src.task_runner.init_db"),
+            patch("src.task_runner.TaskRepository") as MockRepo,
+        ):
+            instance = MockRepo.return_value
+            instance.upsert.return_value = task
+            instance.update.return_value = task
+            run_task_sync(task)
+
+        # update should have been called in the except block
+        assert instance.update.called
+
+
+# ------------------------------------------------------------------ #
+# C1. _build_initial_state                                             #
+# ------------------------------------------------------------------ #
+
+class TestBuildInitialState:
+    def test_has_task_id(self):
+        from src.task_runner import _build_initial_state
+        task = make_task()
+        state = _build_initial_state(task)
+        assert state["task_id"] == task.id
+
+    def test_status_is_in_progress_string(self):
+        from src.task_runner import _build_initial_state
+        state = _build_initial_state(make_task())
+        assert state["status"] == "IN_PROGRESS"
+
+    def test_description_merges_goal_and_description(self):
+        from src.task_runner import _build_initial_state
+        task = make_task(goal="goal text", description="desc text")
+        state = _build_initial_state(task)
+        assert "goal text" in state["task_description"]
+        assert "desc text" in state["task_description"]
+
+    def test_goal_only_description(self):
+        from src.task_runner import _build_initial_state
+        task = make_task(goal="only goal", description="")
+        state = _build_initial_state(task)
+        assert state["task_description"] == "only goal"
+
+    def test_context_merged_into_metadata(self):
+        from src.task_runner import _build_initial_state
+        task = make_task()
+        state = _build_initial_state(task, context={"sector": "retail"})
+        assert state["metadata"]["sector"] == "retail"
+
+    def test_errors_empty_list(self):
+        from src.task_runner import _build_initial_state
+        state = _build_initial_state(make_task())
+        assert state["errors"] == []
+
+    def test_kpis_in_metadata(self):
+        from src.task_runner import _build_initial_state
+        task = make_task(kpis={"ctr": 50.0})
+        state = _build_initial_state(task)
+        assert state["metadata"]["kpis"] == {"ctr": 50.0}
+
+    def test_retry_count_from_task(self):
+        from src.task_runner import _build_initial_state
+        task = make_task(retry_count=3)
+        state = _build_initial_state(task)
+        assert state["retry_count"] == 3

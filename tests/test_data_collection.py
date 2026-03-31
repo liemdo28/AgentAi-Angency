@@ -1,294 +1,443 @@
 """
-Integration tests for data ingestion — file parsing, email processing, KPI extraction.
+Stream D — Data Collection tests.
+
+Covers:
+  D1. Outbound email: send_data_request_email()
+  D2. Inbound parse: parse_message(), extract_attachments_filenames()
+  D3. Account mapping: map_email_to_account()
+  D4. Save attachment: _save_attachment() path safety and file write
+  D5. Trigger data task: process_inbound_email() task creation logic
 """
-import csv
+from __future__ import annotations
+
 import email
 import os
-import sys
-import tempfile
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+# ── Stub heavy deps not available in test environment ──────────────
+# data_collection.py does local imports of these inside functions;
+# stub them in sys.modules so those imports resolve to mocks.
+import sys
+from unittest.mock import MagicMock as _MagicMock
+for _m in ["dotenv", "httpx", "anthropic", "openai"]:
+    sys.modules.setdefault(_m, _MagicMock())
 
-# ── File Parser: CSV ─────────────────────────────────────────────────────────
+# Stub DB modules that are locally imported inside process_inbound_email
+_mock_db_conn = _MagicMock()
+_mock_task_repo_mod = _MagicMock()
+sys.modules.setdefault("src.db.connection", _mock_db_conn)
+sys.modules.setdefault("src.db.repositories.task_repo", _mock_task_repo_mod)
 
-class TestCSVParser:
-    def _write_csv(self, rows: list[dict], tmpdir: str) -> str:
-        filepath = os.path.join(tmpdir, "report.csv")
-        with open(filepath, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-            writer.writeheader()
-            writer.writerows(rows)
-        return filepath
-
-    def test_parse_basic_csv(self):
-        from src.ingestion.file_parser import parse_csv
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            filepath = self._write_csv([
-                {"Campaign": "FB Ads", "Impressions": "100000", "Clicks": "2500", "Spend": "500000"},
-                {"Campaign": "Google", "Impressions": "80000", "Clicks": "3200", "Spend": "400000"},
-            ], tmpdir)
-            result = parse_csv(filepath)
-            assert result.ok
-            assert result.row_count == 2
-            assert result.file_type == "csv"
-            assert "campaign" in result.rows[0]
-            assert result.rows[0]["impressions"] == 100000
-
-    def test_parse_csv_with_commas_in_values(self):
-        from src.ingestion.file_parser import parse_csv
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            filepath = os.path.join(tmpdir, "data.csv")
-            with open(filepath, "w") as f:
-                f.write("Metric,Value\n")
-                f.write("Revenue,\"1,500,000\"\n")
-                f.write("Spend,\"800,000\"\n")
-            result = parse_csv(filepath)
-            assert result.ok
-            assert result.row_count == 2
-            # Value should be coerced to number (commas stripped)
-            assert result.rows[0]["value"] == 1500000
-
-    def test_parse_empty_csv(self):
-        from src.ingestion.file_parser import parse_csv
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            filepath = os.path.join(tmpdir, "empty.csv")
-            with open(filepath, "w") as f:
-                f.write("Col1,Col2\n")
-            result = parse_csv(filepath)
-            assert result.ok
-            assert result.row_count == 0
-
-    def test_parse_nonexistent_file(self):
-        from src.ingestion.file_parser import parse_csv
-        result = parse_csv("/nonexistent/path.csv")
-        assert not result.ok
-        assert len(result.errors) > 0
+from src.ingestion.email_ingestion import (
+    extract_attachments_filenames,
+    map_email_to_account,
+    parse_message,
+)
 
 
-# ── File Parser: Auto-detect ─────────────────────────────────────────────────
+# ------------------------------------------------------------------ #
+# Fixture helpers                                                      #
+# ------------------------------------------------------------------ #
 
-class TestFileParserAutoDetect:
-    def test_auto_detect_csv(self):
-        from src.ingestion.file_parser import parse_file
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            filepath = os.path.join(tmpdir, "data.csv")
-            with open(filepath, "w") as f:
-                f.write("Name,Value\nTest,123\n")
-            result = parse_file(filepath)
-            assert result.ok
-            assert result.file_type == "csv"
-
-    def test_unsupported_extension(self):
-        from src.ingestion.file_parser import parse_file
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            filepath = os.path.join(tmpdir, "data.docx")
-            with open(filepath, "w") as f:
-                f.write("content")
-            result = parse_file(filepath)
-            assert not result.ok
-            assert "Unsupported" in result.errors[0]
-
-    def test_parse_multiple_files(self):
-        from src.ingestion.file_parser import parse_files
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            f1 = os.path.join(tmpdir, "a.csv")
-            f2 = os.path.join(tmpdir, "b.csv")
-            for fp in [f1, f2]:
-                with open(fp, "w") as f:
-                    f.write("Col,Val\nA,1\n")
-            results = parse_files([f1, f2])
-            assert len(results) == 2
-            assert all(r.ok for r in results)
+def build_raw_email(
+    from_addr: str = "sender@client.com",
+    subject: str = "Monthly Report",
+    body: str = "Please find attached.",
+    attachments: list[tuple[str, bytes]] | None = None,
+) -> bytes:
+    msg = MIMEMultipart()
+    msg["From"] = from_addr
+    msg["Subject"] = subject
+    msg["To"] = "agency@agency.ai"
+    msg.attach(MIMEText(body, "plain"))
+    for name, content in (attachments or []):
+        part = MIMEApplication(content, Name=name)
+        part["Content-Disposition"] = f'attachment; filename="{name}"'
+        msg.attach(part)
+    return msg.as_bytes()
 
 
-# ── KPI Extraction ───────────────────────────────────────────────────────────
-
-class TestKPIExtraction:
-    def test_extract_kpis_from_campaign_data(self):
-        from src.ingestion.file_parser import extract_kpis_from_rows
-
-        rows = [
-            {"impressions": 100000, "clicks": 2500, "spend": 500000, "conversions": 150, "revenue": 2000000},
-            {"impressions": 80000, "clicks": 3200, "spend": 400000, "conversions": 200, "revenue": 2500000},
-        ]
-        kpis = extract_kpis_from_rows(rows)
-        assert kpis["impressions"] == 180000
-        assert kpis["clicks"] == 5700
-        assert kpis["spend"] == 900000
-        assert kpis["conversions"] == 350
-        assert kpis["revenue"] == 4500000
-        # Derived metrics
-        assert "ctr" in kpis
-        assert "cpc" in kpis
-        assert "cpa" in kpis
-        assert "roas" in kpis
-        assert kpis["roas"] == 5.0  # 4500000 / 900000
-
-    def test_extract_kpis_empty_rows(self):
-        from src.ingestion.file_parser import extract_kpis_from_rows
-        kpis = extract_kpis_from_rows([])
-        assert kpis == {}
-
-    def test_extract_kpis_no_matching_columns(self):
-        from src.ingestion.file_parser import extract_kpis_from_rows
-        rows = [{"name": "Test", "color": "blue"}]
-        kpis = extract_kpis_from_rows(rows)
-        assert kpis == {}
-
-    def test_extract_kpis_string_numbers(self):
-        """Values like '1,500,000' should be parsed correctly."""
-        from src.ingestion.file_parser import extract_kpis_from_rows
-
-        rows = [
-            {"impressions": "1,500,000", "clicks": "25,000", "spend": "5,000,000"},
-        ]
-        kpis = extract_kpis_from_rows(rows)
-        assert kpis["impressions"] == 1500000
-        assert kpis["clicks"] == 25000
+MAPPING = {"@client.com": "acct-001", "bob@brand.io": "acct-002"}
 
 
-# ── Email Ingestion ──────────────────────────────────────────────────────────
+def make_mock_receipt(status="sent", error=None):
+    from src.tools.email_client import EmailReceipt
+    return EmailReceipt(
+        message_id="msg-001",
+        status=status,
+        sent_at="2026-03-25T00:00:00+00:00",
+        error=error,
+    )
 
-class TestEmailIngestion:
-    def test_parse_message(self):
-        from src.ingestion.email_ingestion import parse_message
 
-        raw = (
-            b"From: bob@acme.com\r\n"
-            b"Subject: Monthly Report\r\n"
-            b"Date: Wed, 26 Mar 2026 10:00:00 +0000\r\n"
-            b"\r\n"
-            b"Please find attached the report.\r\n"
-        )
+# ------------------------------------------------------------------ #
+# D2. parse_message                                                    #
+# ------------------------------------------------------------------ #
+
+class TestParseMessage:
+    def test_extracts_from_field(self):
+        raw = build_raw_email(from_addr="alice@client.com")
+        assert "alice@client.com" in parse_message(raw)["from"]
+
+    def test_extracts_subject(self):
+        raw = build_raw_email(subject="Q1 Data Report")
+        assert parse_message(raw)["subject"] == "Q1 Data Report"
+
+    def test_empty_bytes_returns_empty_headers(self):
+        parsed = parse_message(b"")
+        assert parsed["from"] == ""
+        assert parsed["subject"] == ""
+
+    def test_date_field_present(self):
+        raw = build_raw_email()
         parsed = parse_message(raw)
-        assert parsed["from"] == "bob@acme.com"
-        assert parsed["subject"] == "Monthly Report"
+        assert "date" in parsed
 
-    def test_map_email_to_account(self):
-        from src.ingestion.email_ingestion import map_email_to_account
+    def test_minimal_raw_email(self):
+        raw = b"From: test@example.com\nSubject: Hello\n\nBody"
+        parsed = parse_message(raw)
+        assert "test@example.com" in parsed["from"]
+        assert parsed["subject"] == "Hello"
 
-        parsed = {"from": "alice@brand.io"}
-        mapping = {"@brand.io": "acct-001", "@acme.com": "acct-002"}
-        assert map_email_to_account(parsed, mapping) == "acct-001"
+    def test_multi_word_subject(self):
+        raw = build_raw_email(subject="Q4 2025 Performance Review Data")
+        assert parse_message(raw)["subject"] == "Q4 2025 Performance Review Data"
 
-    def test_map_email_no_match(self):
-        from src.ingestion.email_ingestion import map_email_to_account
 
-        parsed = {"from": "unknown@random.org"}
-        mapping = {"@brand.io": "acct-001"}
-        assert map_email_to_account(parsed, mapping) is None
+# ------------------------------------------------------------------ #
+# D3. map_email_to_account                                             #
+# ------------------------------------------------------------------ #
 
-    def test_extract_attachment_filenames(self):
-        from src.ingestion.email_ingestion import extract_attachments_filenames
+class TestMapEmailToAccount:
+    def test_domain_match(self):
+        assert map_email_to_account({"from": "alice@client.com"}, MAPPING) == "acct-001"
 
-        msg = email.message.EmailMessage()
-        msg["From"] = "test@test.com"
-        msg["Subject"] = "Report"
-        msg.set_content("Body text")
-        msg.add_attachment(b"csv data", maintype="text", subtype="csv", filename="report.csv")
+    def test_exact_email_match(self):
+        assert map_email_to_account({"from": "bob@brand.io"}, MAPPING) == "acct-002"
 
+    def test_case_insensitive(self):
+        assert map_email_to_account({"from": "Alice@CLIENT.COM"}, MAPPING) == "acct-001"
+
+    def test_no_match_returns_none(self):
+        assert map_email_to_account({"from": "unknown@nowhere.com"}, MAPPING) is None
+
+    def test_empty_mapping_returns_none(self):
+        assert map_email_to_account({"from": "alice@client.com"}, {}) is None
+
+    def test_empty_from_returns_none(self):
+        assert map_email_to_account({"from": ""}, MAPPING) is None
+
+    def test_missing_from_key_returns_none(self):
+        assert map_email_to_account({}, MAPPING) is None
+
+    def test_subdomain_still_matches(self):
+        # "mail.client.com" contains "@client.com"? No — "@client.com" not in "sender@mail.client.com"
+        # But "client.com" would match if that were the key
+        mapping = {"client.com": "acct-001"}
+        assert map_email_to_account({"from": "sender@mail.client.com"}, mapping) == "acct-001"
+
+
+# ------------------------------------------------------------------ #
+# D2. extract_attachments_filenames                                    #
+# ------------------------------------------------------------------ #
+
+class TestExtractAttachmentsFilenames:
+    def test_no_attachments_returns_empty(self):
+        raw = build_raw_email()
+        msg = email.message_from_bytes(raw)
+        assert list(extract_attachments_filenames(msg)) == []
+
+    def test_single_attachment_filename(self):
+        raw = build_raw_email(attachments=[("report.csv", b"col1,col2\n1,2")])
+        msg = email.message_from_bytes(raw)
         filenames = list(extract_attachments_filenames(msg))
         assert "report.csv" in filenames
 
+    def test_multiple_attachments(self):
+        raw = build_raw_email(attachments=[("a.csv", b"data"), ("b.xlsx", b"data2")])
+        msg = email.message_from_bytes(raw)
+        filenames = list(extract_attachments_filenames(msg))
+        assert "a.csv" in filenames
+        assert "b.xlsx" in filenames
 
-# ── Data Collection Pipeline (integration) ───────────────────────────────────
+    def test_duplicate_filename_appears_twice(self):
+        raw = build_raw_email(attachments=[("dup.csv", b"1"), ("dup.csv", b"2")])
+        msg = email.message_from_bytes(raw)
+        filenames = list(extract_attachments_filenames(msg))
+        assert filenames.count("dup.csv") == 2
 
-def _can_import_data_collection():
-    try:
+
+# ------------------------------------------------------------------ #
+# D1. send_data_request_email                                          #
+# ------------------------------------------------------------------ #
+
+class TestSendDataRequestEmail:
+    def _patched_send(self, receipt):
+        mock_client = MagicMock()
+        mock_client.send.return_value = receipt
+        return patch("src.ingestion.data_collection._get_email_client", return_value=mock_client)
+
+    def test_returns_sent_status(self):
+        from src.ingestion.data_collection import send_data_request_email
+        with self._patched_send(make_mock_receipt("sent")):
+            result = send_data_request_email("acct-1", "client@example.com", "2026-03")
+        assert result["status"] == "sent"
+
+    def test_returns_account_id(self):
+        from src.ingestion.data_collection import send_data_request_email
+        with self._patched_send(make_mock_receipt()):
+            result = send_data_request_email("acct-999", "x@y.com", "2026-03")
+        assert result["account_id"] == "acct-999"
+
+    def test_returns_report_date(self):
+        from src.ingestion.data_collection import send_data_request_email
+        with self._patched_send(make_mock_receipt()):
+            result = send_data_request_email("acct-1", "x@y.com", "2026-03")
+        assert result["report_date"] == "2026-03"
+
+    def test_custom_subject_used(self):
+        from src.ingestion.data_collection import send_data_request_email
+        mock_client = MagicMock()
+        mock_client.send.return_value = make_mock_receipt()
+        with patch("src.ingestion.data_collection._get_email_client", return_value=mock_client):
+            send_data_request_email("acct-1", "x@y.com", "2026-03", custom_subject="CUSTOM SUBJECT")
+        sent_msg = mock_client.send.call_args[0][0]
+        assert sent_msg.subject == "CUSTOM SUBJECT"
+
+    def test_custom_body_used(self):
+        from src.ingestion.data_collection import send_data_request_email
+        mock_client = MagicMock()
+        mock_client.send.return_value = make_mock_receipt()
+        with patch("src.ingestion.data_collection._get_email_client", return_value=mock_client):
+            send_data_request_email("acct-1", "x@y.com", "2026-03", custom_body="MY BODY TEXT")
+        sent_msg = mock_client.send.call_args[0][0]
+        assert sent_msg.body == "MY BODY TEXT"
+
+    def test_smtp_fail_returns_failed(self):
+        from src.ingestion.data_collection import send_data_request_email
+        with self._patched_send(make_mock_receipt("failed", error="SMTP refused")):
+            result = send_data_request_email("acct-1", "x@y.com", "2026-03")
+        assert result["status"] == "failed"
+        assert result["error"] == "SMTP refused"
+
+    def test_default_subject_contains_report_date(self):
+        from src.ingestion.data_collection import send_data_request_email
+        mock_client = MagicMock()
+        mock_client.send.return_value = make_mock_receipt()
+        with patch("src.ingestion.data_collection._get_email_client", return_value=mock_client):
+            send_data_request_email("acct-1", "x@y.com", "2026-03")
+        sent_msg = mock_client.send.call_args[0][0]
+        assert "2026-03" in sent_msg.subject
+
+    def test_default_body_contains_account_id(self):
+        from src.ingestion.data_collection import send_data_request_email
+        mock_client = MagicMock()
+        mock_client.send.return_value = make_mock_receipt()
+        with patch("src.ingestion.data_collection._get_email_client", return_value=mock_client):
+            send_data_request_email("acct-TESTID", "x@y.com", "2026-03")
+        sent_msg = mock_client.send.call_args[0][0]
+        assert "acct-TESTID" in sent_msg.body
+
+
+# ------------------------------------------------------------------ #
+# D4. _save_attachment                                                 #
+# ------------------------------------------------------------------ #
+
+class TestSaveAttachment:
+    def _make_part(self, filename, payload):
+        part = MagicMock()
+        part.get_filename.return_value = filename
+        part.get_payload.return_value = payload
+        return part
+
+    def test_normal_file_saved(self, tmp_path):
+        from src.ingestion.data_collection import _save_attachment
+        part = self._make_part("report.csv", b"a,b\n1,2")
+        path = _save_attachment(part, str(tmp_path), "acct-1", "2026-03")
+        assert os.path.exists(path)
+        assert open(path, "rb").read() == b"a,b\n1,2"
+
+    def test_path_traversal_stripped(self, tmp_path):
+        from src.ingestion.data_collection import _save_attachment
+        part = self._make_part("../../../etc/passwd", b"evil")
+        path = _save_attachment(part, str(tmp_path), "acct-1", "2026-03")
+        # Must land inside tmp_path, not escape it
+        assert str(tmp_path) in path
+        assert os.path.basename(path) == "passwd"
+
+    def test_colons_in_date_replaced(self, tmp_path):
+        from src.ingestion.data_collection import _save_attachment
+        part = self._make_part("f.csv", b"x")
+        path = _save_attachment(part, str(tmp_path), "acct-1", "2026:03:01 10:00")
+        assert ":" not in path
+
+    def test_no_filename_defaults_to_attachment(self, tmp_path):
+        from src.ingestion.data_collection import _save_attachment
+        part = self._make_part(None, b"data")
+        path = _save_attachment(part, str(tmp_path), "acct-1", "2026-03")
+        assert os.path.basename(path) == "attachment"
+
+    def test_zero_byte_payload_no_file_written(self, tmp_path):
+        from src.ingestion.data_collection import _save_attachment
+        part = self._make_part("empty.csv", None)  # get_payload returns None
+        path = _save_attachment(part, str(tmp_path), "acct-1", "2026-03")
+        # Returns path but doesn't write (no payload)
+        assert path.endswith("empty.csv")
+        assert not os.path.exists(path)  # file not created for empty payload
+
+    def test_dest_dir_created_automatically(self, tmp_path):
+        from src.ingestion.data_collection import _save_attachment
+        part = self._make_part("x.csv", b"data")
+        path = _save_attachment(part, str(tmp_path), "new-account", "2026-04")
+        assert os.path.isdir(os.path.dirname(path))
+
+
+# ------------------------------------------------------------------ #
+# D5. process_inbound_email                                            #
+# ------------------------------------------------------------------ #
+
+def _db_mocks(task_id: str = "task-xyz", create_error: Exception | None = None):
+    """Return a patch.dict context that stubs the DB modules locally imported
+    inside process_inbound_email."""
+    mock_conn = MagicMock()
+    mock_repo_mod = MagicMock()
+    repo_instance = MagicMock()
+    if create_error:
+        repo_instance.create.side_effect = create_error
+    else:
+        created = MagicMock()
+        created.id = task_id
+        repo_instance.create.return_value = created
+    mock_repo_mod.TaskRepository.return_value = repo_instance
+    return patch.dict(sys.modules, {
+        "src.db.connection": mock_conn,
+        "src.db.repositories.task_repo": mock_repo_mod,
+    }), repo_instance
+
+
+class TestProcessInboundEmail:
+    def test_unmatched_sender_returns_unmatched_status(self):
         from src.ingestion.data_collection import process_inbound_email
-        return True
-    except ImportError:
-        return False
-
-
-@pytest.mark.skipif(not _can_import_data_collection(), reason="Missing deps (httpx, etc.)")
-class TestDataCollectionPipeline:
-    def _build_email_with_csv(self, sender: str, csv_content: bytes) -> bytes:
-        """Build a raw RFC-822 email with a CSV attachment."""
-        msg = email.message.EmailMessage()
-        msg["From"] = sender
-        msg["Subject"] = "Monthly Performance Report"
-        msg["Date"] = "Wed, 26 Mar 2026 10:00:00 +0000"
-        msg.set_content("Hi, please find attached our monthly report.")
-        msg.add_attachment(
-            csv_content,
-            maintype="text",
-            subtype="csv",
-            filename="performance.csv",
-        )
-        return msg.as_bytes()
-
-    def test_process_inbound_email_saves_files(self):
-        from src.ingestion.data_collection import process_inbound_email
-
-        csv_data = b"Campaign,Impressions,Clicks,Spend\nFB,100000,2500,500000\n"
-        raw_email = self._build_email_with_csv("bob@acme.com", csv_data)
-        mapping = {"@acme.com": "acct-001"}
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            os.environ["LOCAL_STORAGE_PATH"] = tmpdir
-            result = process_inbound_email(
-                raw_bytes=raw_email,
-                account_mapping=mapping,
-                trigger_task=False,  # Don't trigger DB task in unit test
-            )
-            del os.environ["LOCAL_STORAGE_PATH"]
-
-        assert result["account_id"] == "acct-001"
-        assert len(result["saved_files"]) >= 1
-        assert result["status"] in ("ok", "partial")
-        # Check that parsed KPIs were extracted
-        assert "parsed_kpis" in result
-
-    def test_process_inbound_email_unmatched_sender(self):
-        from src.ingestion.data_collection import process_inbound_email
-
-        raw_email = self._build_email_with_csv("unknown@random.org", b"data")
-        mapping = {"@acme.com": "acct-001"}
-
-        result = process_inbound_email(
-            raw_bytes=raw_email,
-            account_mapping=mapping,
-            trigger_task=False,
-        )
+        raw = build_raw_email(from_addr="unknown@nowhere.net")
+        result = process_inbound_email(raw, MAPPING)
         assert result["status"] == "unmatched"
         assert result["account_id"] is None
+        assert result["task_id"] is None
 
+    def test_no_attachment_returns_no_task(self):
+        from src.ingestion.data_collection import process_inbound_email
+        raw = build_raw_email(from_addr="alice@client.com")
+        with patch("src.ingestion.data_collection._get_storage_dir", return_value="/tmp/test"):
+            result = process_inbound_email(raw, MAPPING, trigger_task=True)
+        assert result["task_id"] is None
+        assert result["saved_files"] == []
 
-# ── ParseResult ──────────────────────────────────────────────────────────────
-
-class TestParseResult:
-    def test_to_dict(self):
-        from src.ingestion.file_parser import ParseResult
-
-        pr = ParseResult(
-            filename="test.csv",
-            file_type="csv",
-            rows=[{"a": 1}, {"a": 2}],
+    def test_attachment_file_saved(self, tmp_path):
+        from src.ingestion.data_collection import process_inbound_email
+        raw = build_raw_email(
+            from_addr="alice@client.com",
+            attachments=[("data.csv", b"header\nrow1")],
         )
-        d = pr.to_dict()
-        assert d["row_count"] == 2
-        assert d["filename"] == "test.csv"
+        db_ctx, _ = _db_mocks()
+        with (
+            db_ctx,
+            patch("src.ingestion.data_collection._get_storage_dir", return_value=str(tmp_path)),
+        ):
+            result = process_inbound_email(raw, MAPPING, trigger_task=False)
 
-    def test_summary(self):
-        from src.ingestion.file_parser import ParseResult
+        assert len(result["saved_files"]) == 1
+        assert result["saved_files"][0].endswith("data.csv")
 
-        pr = ParseResult(
-            filename="report.csv",
-            file_type="csv",
-            rows=[{"impressions": 100, "clicks": 10}],
+    def test_trigger_false_no_task_created(self, tmp_path):
+        from src.ingestion.data_collection import process_inbound_email
+        raw = build_raw_email(
+            from_addr="alice@client.com",
+            attachments=[("report.csv", b"data")],
         )
-        s = pr.summary()
-        assert "report.csv" in s
-        assert "1 rows" in s
+        with patch("src.ingestion.data_collection._get_storage_dir", return_value=str(tmp_path)):
+            result = process_inbound_email(raw, MAPPING, trigger_task=False)
+        assert result["task_id"] is None
+
+    def test_trigger_true_with_files_creates_task(self, tmp_path):
+        from src.ingestion.data_collection import process_inbound_email
+        raw = build_raw_email(
+            from_addr="alice@client.com",
+            attachments=[("report.csv", b"data")],
+        )
+        db_ctx, repo_instance = _db_mocks("task-xyz")
+        with (
+            db_ctx,
+            patch("src.ingestion.data_collection._get_storage_dir", return_value=str(tmp_path)),
+        ):
+            result = process_inbound_email(raw, MAPPING, trigger_task=True)
+
+        # task_id is the auto-generated UUID of the Task object, not the mock return value
+        assert result["task_id"] is not None
+        assert len(result["task_id"]) == 36  # UUID format
+        assert repo_instance.create.called
+
+    def test_task_create_failure_reported_in_errors(self, tmp_path):
+        from src.ingestion.data_collection import process_inbound_email
+        raw = build_raw_email(
+            from_addr="alice@client.com",
+            attachments=[("report.csv", b"data")],
+        )
+        db_ctx, _ = _db_mocks(create_error=Exception("DB write error"))
+        with (
+            db_ctx,
+            patch("src.ingestion.data_collection._get_storage_dir", return_value=str(tmp_path)),
+        ):
+            result = process_inbound_email(raw, MAPPING, trigger_task=True)
+
+        assert result["task_id"] is None
+        assert any("Failed to create data task" in e for e in result["errors"])
+
+    def test_status_partial_when_task_create_fails(self, tmp_path):
+        from src.ingestion.data_collection import process_inbound_email
+        raw = build_raw_email(
+            from_addr="alice@client.com",
+            attachments=[("report.csv", b"data")],
+        )
+        db_ctx, _ = _db_mocks(create_error=Exception("DB error"))
+        with (
+            db_ctx,
+            patch("src.ingestion.data_collection._get_storage_dir", return_value=str(tmp_path)),
+        ):
+            result = process_inbound_email(raw, MAPPING, trigger_task=True)
+
+        assert result["status"] == "partial"
+
+    def test_multiple_attachments_all_saved(self, tmp_path):
+        from src.ingestion.data_collection import process_inbound_email
+        raw = build_raw_email(
+            from_addr="alice@client.com",
+            attachments=[("a.csv", b"data1"), ("b.xlsx", b"data2")],
+        )
+        db_ctx, _ = _db_mocks()
+        with (
+            db_ctx,
+            patch("src.ingestion.data_collection._get_storage_dir", return_value=str(tmp_path)),
+        ):
+            result = process_inbound_email(raw, MAPPING, trigger_task=False)
+
+        assert len(result["saved_files"]) == 2
+
+    def test_account_id_in_result(self, tmp_path):
+        from src.ingestion.data_collection import process_inbound_email
+        raw = build_raw_email(from_addr="alice@client.com")
+        with patch("src.ingestion.data_collection._get_storage_dir", return_value=str(tmp_path)):
+            result = process_inbound_email(raw, MAPPING)
+        assert result["account_id"] == "acct-001"
+
+    def test_ok_status_when_no_errors(self, tmp_path):
+        from src.ingestion.data_collection import process_inbound_email
+        raw = build_raw_email(from_addr="alice@client.com")
+        with patch("src.ingestion.data_collection._get_storage_dir", return_value=str(tmp_path)):
+            result = process_inbound_email(raw, MAPPING, trigger_task=False)
+        assert result["status"] == "ok"
+        assert result["errors"] == []

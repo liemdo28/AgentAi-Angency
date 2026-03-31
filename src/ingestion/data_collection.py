@@ -54,7 +54,13 @@ def _save_attachment(
     safe_date = report_date.replace(":", "-").replace(" ", "_")
     dest_dir = os.path.join(storage_dir, account_id, safe_date)
     os.makedirs(dest_dir, exist_ok=True)
+    # Avoid overwriting: append _1, _2, ... suffix if file exists
+    base, ext = os.path.splitext(filename)
     dest = os.path.join(dest_dir, filename)
+    counter = 1
+    while os.path.exists(dest):
+        dest = os.path.join(dest_dir, f"{base}_{counter}{ext}")
+        counter += 1
     payload = part.get_payload(decode=True)
     if payload:
         with open(dest, "wb") as f:

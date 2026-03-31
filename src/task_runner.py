@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 
 def _build_initial_state(task: Task, context: dict[str, Any] | None = None) -> AgenticState:
     """Construct the initial AgenticState from a Task record."""
+    from src.scoring.rubric_registry import RubricRegistry as _RubricRegistry
+    _registry = _RubricRegistry()
+    _dept = task.current_department or "strategy"
+    _threshold = _registry.quality_threshold(_dept) if _dept else SETTINGS.SCORE_THRESHOLD
+
     description = "\n\n".join(filter(None, [task.goal, task.description]))
     state: AgenticState = {
         "task_id": task.id,
@@ -32,7 +37,7 @@ def _build_initial_state(task: Task, context: dict[str, Any] | None = None) -> A
         "task_type": task.task_type or "",
         "account_id": task.account_id or "",
         "campaign_id": task.campaign_id or "",
-        "quality_threshold": SETTINGS.SCORE_THRESHOLD,
+        "quality_threshold": _threshold,
         "retry_count": task.retry_count,
         "status": "IN_PROGRESS",
         "errors": [],
@@ -86,24 +91,16 @@ def run_task_sync(task: Task, context: dict[str, Any] | None = None) -> dict[str
         retry_count = int(result_state.get("retry_count", task.retry_count))
 
         # ── 4. Map graph status to TaskStatus ───────────────────────────
-        _STATUS_MAP = {
-            "PASSED": TaskStatus.PASSED,
-            "REVIEW_FAILED": TaskStatus.ESCALATED,
-            "FAILED": TaskStatus.FAILED,
-            "IN_PROGRESS": TaskStatus.FAILED,  # should not end in this state
-            "REVIEW": TaskStatus.FAILED,        # stuck in review = failure
-        }
-        if graph_status in _STATUS_MAP:
-            new_status = _STATUS_MAP[graph_status]
+        if graph_status == "PASSED":
+            new_status = TaskStatus.PASSED
+        elif graph_status == "REVIEW_FAILED":
+            new_status = TaskStatus.ESCALATED
         elif errors:
             new_status = TaskStatus.FAILED
-        elif final_output and score > 0:
+        elif graph_status == "DONE":
             new_status = TaskStatus.DONE
         else:
-            # Unknown status: treat as failure, not success
             new_status = TaskStatus.FAILED
-            errors.append(f"Unexpected graph status: {graph_status}")
-            logger.warning("Task %s ended with unexpected status: %s", task.id, graph_status)
 
         # ── 5. Persist updated task ─────────────────────────────────────
         task.status = new_status
@@ -113,6 +110,22 @@ def run_task_sync(task: Task, context: dict[str, Any] | None = None) -> dict[str
         task.retry_count = retry_count
         task.completed_at = now_iso()
         repo.update(task)
+
+        # Persist each review step to the audit review_history table
+        for entry in review_history:
+            try:
+                repo.save_review_history(
+                    task_id=task.id,
+                    step_name=str(entry.get("step", "")),
+                    score=float(entry.get("score", 0.0)),
+                    threshold=float(entry.get("threshold", SETTINGS.SCORE_THRESHOLD)),
+                    decision=str(entry.get("decision", "")),
+                    feedback=str(entry.get("decision_reason", entry.get("feedback", ""))),
+                    breakdown={},
+                    mode=str(entry.get("scoring_method", entry.get("mode", "llm"))),
+                )
+            except Exception as rev_exc:
+                logger.warning("Failed to persist review_history entry for task %s: %s", task.id, rev_exc)
 
         logger.info(
             "Task %s completed: status=%s score=%.1f",
