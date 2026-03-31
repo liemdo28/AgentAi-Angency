@@ -195,6 +195,64 @@ class TaskRepository:
         )
         db.commit()
 
+    def get_stats(self) -> dict[str, Any]:
+        """Return dashboard metrics: counts by status, avg score, pass rate."""
+        db = get_db()
+
+        def count_where(where: str) -> int:
+            row = db.execute(f"SELECT COUNT(*) as n FROM {self.TABLE} WHERE {where}").fetchone()
+            return dict(row)["n"]
+
+        total = count_where("1=1")
+
+        def avg_score_where(where: str) -> float:
+            row = db.execute(
+                f"SELECT AVG(score) as avg FROM {self.TABLE} WHERE score IS NOT NULL AND {where}"
+            ).fetchone()
+            return round(dict(row)["avg"] or 0.0, 1)
+
+        passed = count_where("status IN ('passed','done')")
+        failed = count_where("status IN ('failed','cancelled')")
+        escalated = count_where("status = 'escalated'")
+        active = count_where("status NOT IN ('passed','done','failed','cancelled')")
+        review = count_where("status = 'review'")
+
+        avg_score = avg_score_where("status IN ('passed','done')")
+        pass_rate = round(passed / total * 100, 1) if total > 0 else 0.0
+
+        return {
+            "total": total,
+            "active": active,
+            "passed": passed,
+            "failed": failed,
+            "escalated": escalated,
+            "review": review,
+            "avg_score": avg_score,
+            "pass_rate": pass_rate,
+        }
+
+    def list_all(self, status: str | None = None, department: str | None = None,
+                 search: str | None = None, limit: int = 200) -> list[Task]:
+        """List tasks with optional filters."""
+        db = get_db()
+        conditions = []
+        params: list = []
+        if status:
+            conditions.append("status = ?")
+            params.append(status)
+        if department:
+            conditions.append("current_department = ?")
+            params.append(department)
+        if search:
+            conditions.append("(goal LIKE ? OR description LIKE ?)")
+            params.extend([f"%{search}%", f"%{search}%"])
+        where = " AND ".join(conditions) if conditions else "1=1"
+        rows = db.execute(
+            f"SELECT * FROM {self.TABLE} WHERE {where} ORDER BY created_at DESC LIMIT ?",
+            [*params, limit],
+        ).fetchall()
+        return [Task.from_db_row(dict(r)) for r in rows]
+
     def get_pending_escalations(self) -> list[dict[str, Any]]:
         """Return all audit log entries for escalation actions with 'pending' status."""
         db = get_db()
