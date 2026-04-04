@@ -1,0 +1,60 @@
+version: "3.8"
+
+services:
+  # ── Existing Agency API (port 8000) ──────────────────────────────
+  agency-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env
+    environment:
+      - PYTHONPATH=/app:/app/src
+    restart: unless-stopped
+
+  # ── Control Plane API (port 8002) ────────────────────────────────
+  control-plane-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: ["uvicorn", "apps.api.main:app", "--host", "0.0.0.0", "--port", "8002"]
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env
+    environment:
+      - PYTHONPATH=/app:/app/src
+    depends_on:
+      - agency-api
+    restart: unless-stopped
+
+  # ── Heartbeat Worker ─────────────────────────────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: ["python", "-m", "apps.worker.heartbeat"]
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env
+    environment:
+      - PYTHONPATH=/app:/app/src
+      - ORCHESTRATOR_INTERVAL=10
+    depends_on:
+      - control-plane-api
+    restart: unless-stopped
+
+  # ── React Dashboard (port 3000) ──────────────────────────────────
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    depends_on:
+      - control-plane-api
+    restart: unless-stopped

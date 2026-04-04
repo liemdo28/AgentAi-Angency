@@ -1,0 +1,34 @@
+# ─── Control Plane Policy Configuration ───────────────────────────────────
+# This file governs how the orchestrator decides whether to execute tasks.
+
+cost:
+  # Maximum cumulative USD spend per agent before it gets paused
+  default_limit: 50.0
+
+retry:
+  # How many times a failed task can be retried automatically
+  max: 3
+
+approval:
+  # Task types that require human approval before execution
+  required_for:
+    - send_email
+    - deploy
+    - budget_change
+    - client_communication
+
+scheduling:
+  # Default orchestrator cycle interval in seconds
+  cycle_interval: 10
+
+  # Maximum concurrent tasks per cycle
+  max_concurrent: 5
+
+escalation:
+  # Auto-escalate if task has been running longer than this (hours)
+  stale_task_hours: 48
+
+  # Notify these roles on escalation
+  notify_roles:
+    - ceo
+    - operations_leader

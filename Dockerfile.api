@@ -1,0 +1,19 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System deps
+RUN apt-get update && apt-get install -y --no-install-recommends gcc && rm -rf /var/lib/apt/lists/*
+
+# Python deps
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt pyyaml
+
+# App code
+COPY . .
+
+ENV PYTHONPATH=/app:/app/src
+EXPOSE 8000 8002
+
+# Default: run the existing agency API
+CMD ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8000"]

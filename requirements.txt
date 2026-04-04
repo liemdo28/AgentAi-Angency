@@ -34,3 +34,6 @@ openpyxl>=3.1.0
 # Layer 4 — Scoring (already covered by anthropic/openai but explicit)
 rich>=13.0.0
 pytest>=8.0.0
+
+# Control Plane
+pyyaml>=6.0.0

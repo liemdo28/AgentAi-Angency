@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git pull:*)",
+      "Bash(python -m pytest tests/test_task_model.py tests/test_task_runner.py tests/test_data_collection.py tests/test_engine_extra.py -v --tb=short)",
+      "Bash(python3 -m pytest tests/test_task_model.py tests/test_task_runner.py tests/test_data_collection.py tests/test_engine_extra.py -v --tb=short)"
+    ]
+  }
+}
