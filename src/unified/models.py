@@ -236,36 +236,72 @@ ALL_STORES = {
     ),
 }
 
-# All projects
+# All projects — synced with E:\Project\Master\
 ALL_PROJECTS = {
     "agentai-agency": Project(
         id="agentai-agency",
         name="AgentAI Agency",
-        description="AI-powered agency brain - manages all departments and workflows",
-        store_ids=[]
+        description="AI Company OS — orchestrator, agents, control plane",
+        store_ids=[],
+    ),
+    "BakudanWebsite_Sub": Project(
+        id="BakudanWebsite_Sub",
+        name="Bakudan Ramen Website",
+        description="Official restaurant website — menu, locations, ordering",
+        store_ids=["B1", "B2", "B3"],
+    ),
+    "BakudanWebsite_Sub2": Project(
+        id="BakudanWebsite_Sub2",
+        name="Bakudan Ramen Website v2",
+        description="Secondary iteration of restaurant website",
+        store_ids=["B1", "B2", "B3"],
+    ),
+    "RawWebsite": Project(
+        id="RawWebsite",
+        name="Raw Sushi Bistro Website",
+        description="Restaurant website — menu, blog, analytics",
+        store_ids=["RAW"],
     ),
     "dashboard-taskflow": Project(
         id="dashboard-taskflow",
-        name="Dashboard TaskFlow",
-        description="Task management system for internal team",
-        store_ids=["B1", "B2", "B3", "RAW"]
+        name="TaskFlow Dashboard",
+        description="Project management — tasks, calendar, notifications, PWA",
+        store_ids=["B1", "B2", "B3", "RAW"],
     ),
-    "review-management": Project(
-        id="review-management",
-        name="Review Management MCP",
-        description="Google & Yelp auto-reply",
-        store_ids=["B1", "B2", "B3", "RAW"]
+    "growth-dashboard": Project(
+        id="growth-dashboard",
+        name="Growth Dashboard",
+        description="Growth analytics dashboard on Cloudflare Pages",
+        store_ids=["B1", "B2", "B3"],
     ),
     "integration-full": Project(
         id="integration-full",
-        name="Integration Full (Toast-QB)",
-        description="ToastPOS ↔ QuickBooks sync",
-        store_ids=["B1", "B2", "B3", "RAW", "COPPER", "IFT"]
+        name="Toast POS Integration",
+        description="Desktop app — Toast POS to QuickBooks sync",
+        store_ids=["B1", "B2", "B3", "RAW", "COPPER", "IFT"],
+    ),
+    "review-dashboard": Project(
+        id="review-dashboard",
+        name="ReviewOps Dashboard",
+        description="Next.js frontend for review management system",
+        store_ids=["B1", "B2", "B3", "RAW"],
+    ),
+    "review-management": Project(
+        id="review-management",
+        name="Review MCP Server",
+        description="MCP server for Yelp & Google review management",
+        store_ids=["B1", "B2", "B3", "RAW"],
+    ),
+    "review-system": Project(
+        id="review-system",
+        name="Review Automation System",
+        description="Auto-fetch reviews, AI reply generation, auto-post",
+        store_ids=["B1", "B2", "B3", "RAW"],
     ),
     "marketing": Project(
         id="marketing",
-        name="Marketing Website",
+        name="Marketing Site",
         description="Marketing campaigns and assets (marketing.bakudanramen.com)",
-        store_ids=["B1", "B2", "B3"]
+        store_ids=["B1", "B2", "B3"],
     ),
 }

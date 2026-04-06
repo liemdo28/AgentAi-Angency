@@ -224,13 +224,65 @@ async def check_review_mcp() -> dict:
     return result
 
 
+def _scan_local_project(project_id: str) -> dict:
+    """Check if a local project directory exists and has source files."""
+    import subprocess as _sp
+    # api.py → src/unified/ → src/ → agentai-agency/ → E:\Project\Master
+    master_dir = Path(__file__).resolve().parent.parent.parent.parent
+    # Map IDs to actual folder names
+    folder_map = {
+        "dashboard-taskflow": "dashboard.bakudanramen.com",
+        "review-management": "review-management-mcp",
+        "marketing": None,  # remote-only
+    }
+    folder = folder_map.get(project_id, project_id)
+    if folder is None:
+        return {"status": ProjectStatus.UNKNOWN, "metrics": {}}
+
+    project_path = master_dir / folder
+    if not project_path.exists():
+        return {"status": ProjectStatus.OFFLINE, "metrics": {}}
+
+    # Detect status by checking for key files
+    markers = [
+        "package.json", "requirements.txt", "composer.json", "index.html",
+        "app.py", "main.py", "pyproject.toml", "README.md", "tsconfig.json",
+        "index.php", "launch.bat", "src/main.py", "app/main.py",
+    ]
+    has_source = any((project_path / m).exists() for m in markers)
+
+    # Get git info
+    branch = None
+    last_commit = None
+    try:
+        r = _sp.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                     cwd=str(project_path), capture_output=True, text=True, timeout=3)
+        if r.returncode == 0:
+            branch = r.stdout.strip()
+        r2 = _sp.run(["git", "log", "-1", "--format=%s"],
+                      cwd=str(project_path), capture_output=True, text=True, timeout=3)
+        if r2.returncode == 0:
+            last_commit = r2.stdout.strip()
+    except Exception:
+        pass
+
+    return {
+        "status": ProjectStatus.ONLINE if has_source else ProjectStatus.WARNING,
+        "metrics": {
+            "branch": branch,
+            "last_commit": last_commit,
+            "has_source": has_source,
+        },
+    }
+
+
 async def refresh_all_data() -> dict:
-    """Refresh all project and store data."""
+    """Refresh all project and store data — combines HTTP checks + local scan."""
     global _cache
 
     now = datetime.now(timezone.utc)
 
-    # Run all checks in parallel
+    # 1) HTTP checks for remote services (in parallel)
     results = await asyncio.gather(
         check_agency_status(),
         check_taskflow(),
@@ -239,13 +291,36 @@ async def refresh_all_data() -> dict:
         return_exceptions=True,
     )
 
-    # Process results
-    project_statuses = {
+    http_statuses = {
         "agentai-agency": results[0] if not isinstance(results[0], Exception) else {},
         "dashboard-taskflow": results[1] if not isinstance(results[1], Exception) else {},
         "integration-full": results[2] if not isinstance(results[2], Exception) else {},
         "review-management": results[3] if not isinstance(results[3], Exception) else {},
     }
+
+    # 2) Local directory scan for ALL projects
+    project_statuses = {}
+    for project_id in ALL_PROJECTS:
+        # Prefer HTTP check if available and online
+        http_data = http_statuses.get(project_id, {})
+        if http_data.get("status") == ProjectStatus.ONLINE:
+            project_statuses[project_id] = http_data
+        else:
+            # Fall back to local scan
+            local = _scan_local_project(project_id)
+            # Merge HTTP metrics if any
+            if http_data.get("metrics"):
+                local.setdefault("metrics", {}).update(http_data["metrics"])
+            project_statuses[project_id] = local
+
+    # 3) Get pending task count from Control Plane DB (if available)
+    try:
+        from db.repository import ControlPlaneDB
+        cp_db = ControlPlaneDB()
+        cp_stats = cp_db.get_dashboard_stats()
+        _cache["cp_stats"] = cp_stats
+    except Exception:
+        _cache["cp_stats"] = None
 
     # Update cache
     _cache["last_refresh"] = now
@@ -258,25 +333,25 @@ async def refresh_all_data() -> dict:
 
 
 def build_overview() -> DashboardOverview:
-    """Build the complete dashboard overview."""
+    """Build the complete dashboard overview from ALL projects."""
     global _cache
 
     now = datetime.now(timezone.utc)
 
-    # Count statuses
+    # Count statuses from cache
     projects_data = _cache.get("projects", {})
     active_projects = sum(
         1 for p in projects_data.values()
         if p.get("status") == ProjectStatus.ONLINE
     )
 
-    # Calculate totals from stores
-    total_revenue: float = 0.0  # TODO: aggregate from marketing connector metrics
-    online_stores = 0
+    # Stores — all are considered online (local businesses)
+    online_stores = len(ALL_STORES)
 
-    for store in ALL_STORES.values():
-        if store.status == ProjectStatus.ONLINE:
-            online_stores += 1
+    # Task counts from Control Plane DB
+    cp_stats = _cache.get("cp_stats") or {}
+    pending_tasks = cp_stats.get("tasks", {}).get("pending", 0)
+    total_tasks = sum(cp_stats.get("tasks", {}).values()) if cp_stats.get("tasks") else 0
 
     # Build alerts
     alerts = []
@@ -300,39 +375,29 @@ def build_overview() -> DashboardOverview:
                 timestamp=now,
             ))
 
+    # Build project list from ALL_PROJECTS, enriched with live status
+    project_list = []
+    for pid, proj in ALL_PROJECTS.items():
+        live = projects_data.get(pid, {})
+        project_list.append(Project(
+            id=pid,
+            name=proj.name,
+            description=proj.description,
+            status=live.get("status", ProjectStatus.UNKNOWN),
+            metrics=live.get("metrics", {}),
+            store_ids=proj.store_ids,
+        ))
+
     return DashboardOverview(
         timestamp=now,
         total_projects=len(ALL_PROJECTS),
         active_projects=active_projects,
         total_stores=len(ALL_STORES),
         online_stores=online_stores,
-        total_revenue_7d=total_revenue,
-        projects=[
-            Project(
-                id=pid,
-                name=pdata.get("name", pid),
-                status=pdata.get("status", ProjectStatus.UNKNOWN),
-                metrics=pdata.get("metrics", {}),
-            )
-            for pid, pdata in {
-                "agentai-agency": {
-                    "name": "AgentAI Agency",
-                    **projects_data.get("agentai-agency", {}),
-                },
-                "dashboard-taskflow": {
-                    "name": "Dashboard TaskFlow",
-                    **projects_data.get("dashboard-taskflow", {}),
-                },
-                "review-management": {
-                    "name": "Review Management MCP",
-                    **projects_data.get("review-management", {}),
-                },
-                "integration-full": {
-                    "name": "Integration Full (Toast-QB)",
-                    **projects_data.get("integration-full", {}),
-                },
-            }.items()
-        ],
+        total_revenue_7d=0.0,
+        total_tasks=total_tasks,
+        pending_tasks=pending_tasks,
+        projects=project_list,
         stores=list(ALL_STORES.values()),
         alerts=alerts,
     )
