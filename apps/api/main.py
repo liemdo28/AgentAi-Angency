@@ -60,6 +60,16 @@ registry = build_registry()
 policy_engine = PolicyEngine()
 orchestrator = Orchestrator(db=db, agent_registry=registry, policy_engine=policy_engine)
 
+# Auto-register all runtime agents in DB so FK constraints work
+for _agent_info in registry.list_agents():
+    db.register_agent(
+        agent_id=_agent_info["id"],
+        role=_agent_info.get("title", _agent_info["id"]),
+        agent_type=_agent_info["type"],
+        model=_agent_info.get("model", ""),
+        budget_limit=50.0,
+    )
+
 
 # ── Request / Response models ─────────────────────────────────────────
 
@@ -122,6 +132,62 @@ def create_goal(body: GoalCreate):
 @app.get("/goals")
 def list_goals():
     return db.list_goals()
+
+
+# ── Smart Issues (AI Workflow Planner) ─────────────────────────────────
+
+class SmartIssueRequest(BaseModel):
+    text: str  # natural language request
+    auto_create: bool = False  # if True, auto-create all tasks
+
+
+@app.post("/issues/plan")
+def plan_smart_issue(body: SmartIssueRequest):
+    """Analyze a natural language request and return a multi-department workflow plan."""
+    from core.orchestrator.workflow_planner import plan_workflow
+    plan = plan_workflow(body.text)
+    return plan
+
+
+@app.post("/issues/execute")
+def execute_smart_issue(body: SmartIssueRequest):
+    """Plan AND create all tasks + goal from a natural language request."""
+    from core.orchestrator.workflow_planner import plan_workflow
+    plan = plan_workflow(body.text)
+
+    # 1. Create a goal for this workflow
+    goal = db.create_goal(
+        title=plan["template_name"] + ": " + body.text[:80],
+        description=plan["summary"],
+        owner="workflow",
+    )
+
+    # 2. Create sub-tasks for each phase
+    created_tasks = []
+    for phase in plan["phases"]:
+        for task_spec in phase["tasks"]:
+            t = db.create_task(
+                title=task_spec["title"],
+                assigned_agent_id=task_spec["agent_id"],
+                goal_id=goal["id"],
+                description=task_spec["description"],
+                task_type="smart_workflow",
+                priority=task_spec["priority"],
+                context_json={
+                    "phase": phase["phase"],
+                    "phase_name": phase["name"],
+                    "original_request": body.text,
+                    "tools": task_spec.get("tools", []),
+                },
+            )
+            created_tasks.append(t)
+
+    return {
+        "goal": goal,
+        "plan": plan,
+        "created_tasks": created_tasks,
+        "total_created": len(created_tasks),
+    }
 
 
 # ── Tasks ─────────────────────────────────────────────────────────────

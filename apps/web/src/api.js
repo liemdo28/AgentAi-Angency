@@ -38,6 +38,10 @@ export const requestApproval = (taskId) => request(`/approvals/${taskId}/request
 export const resolveApproval = (id, data) =>
   request(`/approvals/${id}/resolve`, { method: 'POST', body: JSON.stringify(data) });
 
+// Smart Issues
+export const planSmartIssue = (text) => request('/issues/plan', { method: 'POST', body: JSON.stringify({ text }) });
+export const executeSmartIssue = (text) => request('/issues/execute', { method: 'POST', body: JSON.stringify({ text, auto_create: true }) });
+
 // Activity
 export const getActivity = () => request('/activity');
 
