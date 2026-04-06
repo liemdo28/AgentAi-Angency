@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
+import React, { useState, useEffect, useCallback, createContext, useContext } from 'react';
+import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import Dashboard from './pages/Dashboard';
 import Issues from './pages/Issues';
 import IssueDetail from './pages/IssueDetail';
@@ -15,7 +15,46 @@ import Settings from './pages/Settings';
 import { getStats } from './api';
 import './styles.css';
 
-// Simple SVG icons
+// ── Theme Context ─────────────────────────────────────────────
+const ThemeContext = createContext({
+  theme: 'dark',
+  setTheme: () => {},
+  accent: '#6c5ce7',
+  setAccent: () => {},
+});
+
+export const useTheme = () => useContext(ThemeContext);
+
+function ThemeProvider({ children }) {
+  const [theme, setThemeState] = useState(() => localStorage.getItem('agentai-theme') || 'dark');
+  const [accent, setAccentState] = useState(() => localStorage.getItem('agentai-accent') || '#6c5ce7');
+
+  const setTheme = useCallback((t) => {
+    setThemeState(t);
+    localStorage.setItem('agentai-theme', t);
+    document.documentElement.setAttribute('data-theme', t);
+  }, []);
+
+  const setAccent = useCallback((a) => {
+    setAccentState(a);
+    localStorage.setItem('agentai-accent', a);
+    document.documentElement.style.setProperty('--user-accent', a);
+  }, []);
+
+  // Sync on mount (in case React hydrates after the inline script)
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    document.documentElement.style.setProperty('--user-accent', accent);
+  }, []);
+
+  return (
+    <ThemeContext.Provider value={{ theme, setTheme, accent, setAccent }}>
+      {children}
+    </ThemeContext.Provider>
+  );
+}
+
+// ── Simple SVG icons ──────────────────────────────────────────
 const Icon = ({ name }) => {
   const icons = {
     dashboard: <svg className="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>,
@@ -33,7 +72,43 @@ const Icon = ({ name }) => {
   return icons[name] || null;
 };
 
-export default function App() {
+// ── Page title from pathname ──────────────────────────────────
+const PAGE_TITLES = {
+  '/': 'Overview',
+  '/issues': 'Issues',
+  '/routines': 'Routines',
+  '/goals': 'Goals',
+  '/projects': 'Projects',
+  '/stores': 'Stores',
+  '/org': 'Org Chart',
+  '/costs': 'Costs',
+  '/activity': 'Activity',
+  '/approvals': 'Approvals',
+  '/settings': 'Settings',
+};
+
+function ContentHeader() {
+  const location = useLocation();
+  const { theme, setTheme } = useTheme();
+
+  const basePath = '/' + (location.pathname.split('/')[1] || '');
+  const title = PAGE_TITLES[basePath] || 'AgentAI';
+
+  const toggleTheme = () => setTheme(theme === 'dark' ? 'light' : 'dark');
+
+  return (
+    <div className="content-header">
+      <span className="content-header-title">{title}</span>
+      <div className="content-header-actions">
+        <button onClick={toggleTheme} className="btn btn-ghost btn-sm">
+          {theme === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AppShell() {
   const [stats, setStats] = useState(null);
 
   useEffect(() => {
@@ -45,61 +120,70 @@ export default function App() {
   const running = stats?.tasks?.running ?? 0;
 
   return (
+    <div className="app">
+      <nav className="sidebar">
+        <div className="sidebar-logo">
+          <div className="sidebar-logo-icon">AI</div>
+          <span className="sidebar-logo-text">AgentAI</span>
+        </div>
+
+        <div className="sidebar-section">
+          <div className="sidebar-section-title">Work</div>
+          <NavLink to="/issues"><Icon name="issues" /> Issues {running > 0 && <span className="badge-live">{running} live</span>}</NavLink>
+          <NavLink to="/routines"><Icon name="routines" /> Routines</NavLink>
+          <NavLink to="/goals"><Icon name="goals" /> Goals</NavLink>
+        </div>
+
+        <div className="sidebar-divider" />
+
+        <div className="sidebar-section">
+          <div className="sidebar-section-title">Company</div>
+          <NavLink to="/" end><Icon name="dashboard" /> Overview</NavLink>
+          <NavLink to="/projects"><Icon name="projects" /> Projects</NavLink>
+          <NavLink to="/stores"><Icon name="stores" /> Stores</NavLink>
+          <NavLink to="/org"><Icon name="org" /> Org Chart</NavLink>
+          <NavLink to="/costs"><Icon name="costs" /> Costs</NavLink>
+          <NavLink to="/activity"><Icon name="activity" /> Activity</NavLink>
+          <NavLink to="/approvals">
+            <Icon name="approvals" /> Approvals
+            {stats?.tasks?.pending > 0 && <span className="sidebar-badge">{stats.tasks.pending}</span>}
+          </NavLink>
+        </div>
+
+        <div className="sidebar-divider" />
+
+        <div className="sidebar-section">
+          <NavLink to="/settings"><Icon name="settings" /> Settings</NavLink>
+        </div>
+      </nav>
+
+      <main className="content">
+        <ContentHeader />
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/issues" element={<Issues />} />
+          <Route path="/issues/:id" element={<IssueDetail />} />
+          <Route path="/routines" element={<Routines />} />
+          <Route path="/goals" element={<Goals />} />
+          <Route path="/projects" element={<Projects />} />
+          <Route path="/stores" element={<Stores />} />
+          <Route path="/org" element={<OrgChart />} />
+          <Route path="/costs" element={<Costs />} />
+          <Route path="/activity" element={<Activity />} />
+          <Route path="/approvals" element={<Approvals />} />
+          <Route path="/settings" element={<Settings />} />
+        </Routes>
+      </main>
+    </div>
+  );
+}
+
+export default function App() {
+  return (
     <BrowserRouter>
-      <div className="app">
-        <nav className="sidebar">
-          <div className="sidebar-logo">
-            <div className="sidebar-logo-icon">AI</div>
-            <span className="sidebar-logo-text">AgentAI</span>
-          </div>
-
-          <div className="sidebar-section">
-            <div className="sidebar-section-title">Work</div>
-            <NavLink to="/issues"><Icon name="issues" /> Issues {running > 0 && <span className="badge-live">{running} live</span>}</NavLink>
-            <NavLink to="/routines"><Icon name="routines" /> Routines</NavLink>
-            <NavLink to="/goals"><Icon name="goals" /> Goals</NavLink>
-          </div>
-
-          <div className="sidebar-divider" />
-
-          <div className="sidebar-section">
-            <div className="sidebar-section-title">Company</div>
-            <NavLink to="/" end><Icon name="dashboard" /> Overview</NavLink>
-            <NavLink to="/projects"><Icon name="projects" /> Projects</NavLink>
-            <NavLink to="/stores"><Icon name="stores" /> Stores</NavLink>
-            <NavLink to="/org"><Icon name="org" /> Org Chart</NavLink>
-            <NavLink to="/costs"><Icon name="costs" /> Costs</NavLink>
-            <NavLink to="/activity"><Icon name="activity" /> Activity</NavLink>
-            <NavLink to="/approvals">
-              <Icon name="approvals" /> Approvals
-              {stats?.tasks?.pending > 0 && <span className="sidebar-badge">{stats.tasks.pending}</span>}
-            </NavLink>
-          </div>
-
-          <div className="sidebar-divider" />
-
-          <div className="sidebar-section">
-            <NavLink to="/settings"><Icon name="settings" /> Settings</NavLink>
-          </div>
-        </nav>
-
-        <main className="content">
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/issues" element={<Issues />} />
-            <Route path="/issues/:id" element={<IssueDetail />} />
-            <Route path="/routines" element={<Routines />} />
-            <Route path="/goals" element={<Goals />} />
-            <Route path="/projects" element={<Projects />} />
-            <Route path="/stores" element={<Stores />} />
-            <Route path="/org" element={<OrgChart />} />
-            <Route path="/costs" element={<Costs />} />
-            <Route path="/activity" element={<Activity />} />
-            <Route path="/approvals" element={<Approvals />} />
-            <Route path="/settings" element={<Settings />} />
-          </Routes>
-        </main>
-      </div>
+      <ThemeProvider>
+        <AppShell />
+      </ThemeProvider>
     </BrowserRouter>
   );
 }

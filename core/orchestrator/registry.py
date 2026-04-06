@@ -33,7 +33,17 @@ class AgentRegistry:
 
     def list_agents(self) -> list[dict]:
         return [
-            {"id": aid, "type": type(a).__name__, "description": getattr(a, "description", "")}
+            {
+                "id": aid,
+                "type": type(a).__name__,
+                "description": getattr(a, "description", ""),
+                "title": getattr(a, "title", ""),
+                "responsibilities": getattr(a, "responsibilities", []),
+                "tools": getattr(a, "agent_tools", []),
+                "kpis": getattr(a, "kpis", []),
+                "model": getattr(a, "model", ""),
+                "level": getattr(a, "level", ""),
+            }
             for aid, a in self._agents.items()
         ]
 

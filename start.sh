@@ -57,10 +57,11 @@ echo $UNIFIED_PID > .unified.pid
 
 sleep 2
 
-echo -e "${GREEN}[4/4]${NC} Starting Dashboard Web Server (port 8080)..."
-cd dashboard
-nohup $PYTHON -m http.server 8080 > ../logs/dashboard.log 2>&1 &
-cd ..
+echo -e "${GREEN}[4/4]${NC} Starting React Dashboard on :3000..."
+if [ ! -d "apps/web/node_modules" ]; then
+    (cd apps/web && npm install --silent)
+fi
+(cd apps/web && npm run dev) > logs/dashboard.log 2>&1 &
 DASHBOARD_PID=$!
 echo "Dashboard started (PID: $DASHBOARD_PID)"
 echo $DASHBOARD_PID > .dashboard.pid
@@ -73,7 +74,7 @@ echo ""
 echo "Services:"
 echo -e "  ${GREEN}Agency API${NC}:       http://localhost:8000"
 echo -e "  ${GREEN}Unified API${NC}:      http://localhost:8001"
-echo -e "  ${GREEN}Dashboard${NC}:         http://localhost:8080"
+echo -e "  ${GREEN}Dashboard${NC}:         http://localhost:3000"
 echo ""
 echo "API Docs:"
 echo "  Agency:    http://localhost:8000/docs"
@@ -88,9 +89,9 @@ echo ""
 
 # Open browser
 if command -v xdg-open &> /dev/null; then
-    xdg-open http://localhost:8080 2>/dev/null || true
+    xdg-open http://localhost:3000 2>/dev/null || true
 elif command -v open &> /dev/null; then
-    open http://localhost:8080 2>/dev/null || true
+    open http://localhost:3000 2>/dev/null || true
 fi
 
 echo -e "${YELLOW}Dashboard should open in your browser.${NC}"

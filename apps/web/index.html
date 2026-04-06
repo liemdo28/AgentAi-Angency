@@ -7,6 +7,14 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   </head>
   <body>
+    <script>
+      (function() {
+        var t = localStorage.getItem('agentai-theme') || 'dark';
+        var a = localStorage.getItem('agentai-accent') || '#6c5ce7';
+        document.documentElement.setAttribute('data-theme', t);
+        document.documentElement.style.setProperty('--user-accent', a);
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

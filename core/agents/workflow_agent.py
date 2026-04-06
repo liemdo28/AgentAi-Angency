@@ -20,6 +20,15 @@ class WorkflowAgent(BaseAgent):
 
     description = "Runs a task through the complete agency LangGraph workflow"
 
+    from core.agents.roles import ROLE_DEFINITIONS
+    _role = ROLE_DEFINITIONS.get("workflow", {})
+    title = _role.get("title", "Workflow Agent")
+    responsibilities = _role.get("responsibilities", [])
+    agent_tools = _role.get("tools", [])
+    kpis = _role.get("kpis", [])
+    model = _role.get("model", "")
+    level = _role.get("level", "c-suite")
+
     def run(self, task: Dict[str, Any]) -> Dict[str, Any]:
         try:
             from src.agents.supervisor import AgencySupervisor

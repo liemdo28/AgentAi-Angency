@@ -27,3 +27,15 @@ agency_state.json
 
 # LangGraph checkpoint (if used)
 .checkpoints/
+
+# Node
+node_modules/
+dist/
+.cache/
+
+# Logs
+logs/
+*.log
+
+# Google credentials (sensitive)
+google-service-account.json

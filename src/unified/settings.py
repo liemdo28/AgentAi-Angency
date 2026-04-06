@@ -85,7 +85,7 @@ class Settings(BaseSettings if _has_pydantic_settings else object):
     job_default_timeout: int = 300  # 5 minutes default
 
     # ── Dashboard Web Server ───────────────────────────────
-    dashboard_port: int = 8080
+    dashboard_port: int = 3000
     unified_port: int = 8001
 
     # ── Security ───────────────────────────────────────────

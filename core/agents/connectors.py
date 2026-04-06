@@ -43,18 +43,45 @@ class _ConnectorAgent(BaseAgent):
 
 
 class MarketingAgent(_ConnectorAgent):
-    description = "Marketing site connector agent"
     connector_module = "marketing_connector"
     connector_class = "MarketingConnector"
 
+    from core.agents.roles import ROLE_DEFINITIONS
+    _role = ROLE_DEFINITIONS.get("connector-marketing", {})
+    description = _role.get("system_prompt", "Marketing site connector agent")
+    title = _role.get("title", "Marketing Ops")
+    responsibilities = _role.get("responsibilities", [])
+    agent_tools = _role.get("tools", [])
+    kpis = _role.get("kpis", [])
+    model = _role.get("model", "")
+    level = _role.get("level", "specialist")
+
 
 class ReviewAgent(_ConnectorAgent):
-    description = "Review management connector agent"
     connector_module = "review_connector"
     connector_class = "ReviewConnector"
 
+    from core.agents.roles import ROLE_DEFINITIONS
+    _role = ROLE_DEFINITIONS.get("connector-review", {})
+    description = _role.get("system_prompt", "Review management connector agent")
+    title = _role.get("title", "Review Ops")
+    responsibilities = _role.get("responsibilities", [])
+    agent_tools = _role.get("tools", [])
+    kpis = _role.get("kpis", [])
+    model = _role.get("model", "")
+    level = _role.get("level", "specialist")
+
 
 class TaskFlowAgent(_ConnectorAgent):
-    description = "TaskFlow dashboard connector agent"
     connector_module = "taskflow_connector"
     connector_class = "TaskFlowConnector"
+
+    from core.agents.roles import ROLE_DEFINITIONS
+    _role = ROLE_DEFINITIONS.get("connector-taskflow", {})
+    description = _role.get("system_prompt", "TaskFlow dashboard connector agent")
+    title = _role.get("title", "TaskFlow Ops")
+    responsibilities = _role.get("responsibilities", [])
+    agent_tools = _role.get("tools", [])
+    kpis = _role.get("kpis", [])
+    model = _role.get("model", "")
+    level = _role.get("level", "specialist")

@@ -38,10 +38,11 @@ start "UnifiedAPI" /min python -m uvicorn src.unified.api:app --host 0.0.0.0 --p
 
 timeout /t 3 /nobreak >nul
 
-echo [4/4] Starting Dashboard Web Server (port 8080)...
-cd dashboard
-start "Dashboard" /min python -m http.server 8080
-cd ..
+echo [4/4] Starting React Dashboard on :3000...
+if not exist "apps\web\node_modules" (
+    cd apps\web && npm install --silent && cd ..\..
+)
+start "Dashboard" /min cmd /c "cd apps\web && npm run dev"
 
 echo.
 echo ======================================
@@ -51,7 +52,7 @@ echo.
 echo Services:
 echo   Agency API:       http://localhost:8000
 echo   Unified API:      http://localhost:8001
-echo   Dashboard:        http://localhost:8080
+echo   Dashboard:        http://localhost:3000
 echo.
 echo API Docs:
 echo   Agency:    http://localhost:8000/docs
@@ -64,6 +65,6 @@ echo   taskkill /FI "WINDOWTITLE eq Dashboard" /F
 echo.
 
 REM Open browser
-start http://localhost:8080
+start http://localhost:3000
 
 pause

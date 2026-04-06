@@ -26,6 +26,7 @@ export const cancelTask = (id) => request(`/tasks/${id}/cancel`, { method: 'POST
 // Agents
 export const listAgents = () => request('/agents');
 export const listRuntimeAgents = () => request('/agents/runtime');
+export const listAgentRoles = () => request('/agents/roles');
 export const registerAgent = (data) => request('/agents', { method: 'POST', body: JSON.stringify(data) });
 
 // Jobs
@@ -43,6 +44,7 @@ export const getActivity = () => request('/activity');
 // Projects
 export const listProjects = () => request('/projects');
 export const getProject = (id) => request(`/projects/${id}`);
+export const checkProjectHealth = (id) => request(`/projects/${id}/health`);
 
 // Stores
 export const listStores = () => request('/stores');

@@ -330,10 +330,10 @@ PROJECT_REGISTRY = {
 
 # Store registry (Bakudan Ramen locations)
 STORE_REGISTRY = {
-    "B1": {"name": "Bakudan Ramen — Alamo Ranch", "address": "12602 W Interstate 10, San Antonio, TX", "brand": "bakudan"},
-    "B2": {"name": "Bakudan Ramen — La Cantera", "address": "15900 La Cantera Pkwy, San Antonio, TX", "brand": "bakudan"},
-    "B3": {"name": "Bakudan Ramen — Stone Oak", "address": "22211 IH 10 W, San Antonio, TX", "brand": "bakudan"},
-    "RAW": {"name": "Raw Sushi Bistro", "address": "5756 Pacific Ave, Stockton, CA", "brand": "raw"},
+    "B1": {"name": "Bakudan Ramen - Alamo Ranch", "address": "12602 W Interstate 10, San Antonio, TX 78249", "brand": "bakudan"},
+    "B2": {"name": "Bakudan Ramen - La Cantera", "address": "15900 La Cantera Pkwy, San Antonio, TX 78256", "brand": "bakudan"},
+    "B3": {"name": "Bakudan Ramen - Stone Oak", "address": "22211 IH 10 W, San Antonio, TX 78256", "brand": "bakudan"},
+    "RAW": {"name": "Raw Sushi Bistro - Stockton", "address": "5756 Pacific Ave, Stockton, CA 95207", "brand": "raw"},
     "COPPER": {"name": "Copper Bowl", "address": "TBD", "brand": "copper"},
     "IFT": {"name": "International Food Truck", "address": "Mobile", "brand": "ift"},
 }
@@ -373,20 +373,28 @@ def _git_info(project_path: Path) -> dict:
     return info
 
 
-def _detect_status(project_path: Path) -> str:
+def _detect_status(project_path: Path, port: int | None = None) -> str:
     """Detect if a project is healthy based on existence of key files."""
     if not project_path.exists():
         return "offline"
+    # Check if service is running on its port
+    if port:
+        try:
+            import urllib.request
+            urllib.request.urlopen(f"http://localhost:{port}", timeout=1.5)
+            return "running"
+        except Exception:
+            pass
+    # Check for source files
     marker_files = [
         "package.json", "requirements.txt", "composer.json",
         "index.html", "app.py", "main.py", "pyproject.toml",
         "README.md", ".gitignore", "Makefile", "tsconfig.json",
         "index.php", "launch.bat", "setup.py",
     ]
-    # Also check subdirectories for common entry points
     sub_markers = ["src/main.py", "app/main.py", "desktop-app/app.py"]
     if any((project_path / f).exists() for f in marker_files + sub_markers):
-        return "online"
+        return "idle"
     return "warning"
 
 
@@ -397,7 +405,7 @@ def list_projects():
     for dir_name, meta in PROJECT_REGISTRY.items():
         project_path = MASTER_DIR / dir_name
         git = _git_info(project_path)
-        status = _detect_status(project_path)
+        status = _detect_status(project_path, meta.get("port"))
 
         projects.append({
             "id": dir_name,
@@ -414,6 +422,7 @@ def list_projects():
             "last_commit": git["last_commit"],
             "last_commit_date": git["last_commit_date"],
             "dirty": git["dirty"],
+            "local_path": str(project_path),
         })
     return projects
 
@@ -427,7 +436,7 @@ def get_project(project_id: str):
 
     project_path = MASTER_DIR / project_id
     git = _git_info(project_path)
-    status = _detect_status(project_path)
+    status = _detect_status(project_path, meta.get("port"))
 
     # Count files
     file_count = 0
@@ -445,6 +454,12 @@ def get_project(project_id: str):
         "file_count": file_count,
         **git,
     }
+
+
+@app.get("/agents/roles")
+def list_agent_roles():
+    from core.agents.roles import ROLE_DEFINITIONS
+    return ROLE_DEFINITIONS
 
 
 @app.get("/stores")

@@ -25,6 +25,19 @@ class DepartmentAgent(BaseAgent):
     def __init__(self, department_name: str):
         self.department_name = department_name
         self.description = f"Department agent for {department_name}"
+
+        from core.agents.roles import ROLE_DEFINITIONS
+        role_key = f"dept-{department_name}"
+        role_def = ROLE_DEFINITIONS.get(role_key, {})
+        self.title = role_def.get("title", department_name)
+        self.responsibilities = role_def.get("responsibilities", [])
+        self.agent_tools = role_def.get("tools", [])
+        self.kpis = role_def.get("kpis", [])
+        self.model = role_def.get("model", "")
+        self.level = role_def.get("level", "")
+        if role_def.get("system_prompt"):
+            self.description = role_def["system_prompt"]
+
         self._leader = None
         self._employees = []
         self._load_department()
