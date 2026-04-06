@@ -26,7 +26,11 @@ MARKETING_BASE_URL=https://marketing.bakudanramen.com
 MARKETING_API_TOKEN=<your_bearer_token>
 MARKETING_TIMEOUT=120
 ```
-- Log into marketing site → Settings → API Tokens (or ask the team)
+- Generate a session token:
+  `POST https://marketing.bakudanramen.com/api/auth/token`
+- Exchange that session token for a long-lived API key:
+  `POST https://marketing.bakudanramen.com/api/auth/key`
+- Use the returned `gdr_...` value as `MARKETING_API_TOKEN`
 - Token is sent as `Authorization: Bearer <token>` header
 
 ### TaskFlow (`dashboard.bakudanramen.com`)
@@ -39,15 +43,15 @@ TASKFLOW_TIMEOUT=60
 - Use the same credentials you use in the browser
 - Session cookie is cached in-memory; auto re-logs in on 401/403
 
-### Growth Dashboard (`bakudanramen.com/growth-dashboard/api`)
+### Growth Dashboard (`marketing.bakudanramen.com/api`)
 ```
-GROWTH_BASE_URL=https://bakudanramen.com/growth-dashboard/api
+GROWTH_BASE_URL=https://marketing.bakudanramen.com/api
+GROWTH_API_KEY=<gdr_...>
 GROWTH_TIMEOUT=60
 ```
-- No API key required — these endpoints are served from bakudanramen.com
+- The same `gdr_...` key can be used for both `MARKETING_API_TOKEN` and `GROWTH_API_KEY`
 - Branch-state.php and analytics.php are included in the `marketing` connector
-- Confirm exact URL with hosting team
-- May be a PHP backend requiring specific headers
+- API is served from the DreamHost PHP backend behind `marketing.bakudanramen.com`
 
 ### Integration Full (Toast-QB sync)
 ```
