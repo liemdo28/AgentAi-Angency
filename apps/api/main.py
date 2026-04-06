@@ -16,8 +16,12 @@ Run:
 
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 import sys
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
@@ -219,3 +223,240 @@ def get_activity(limit: int = 50):
     tasks = db.list_tasks(limit=limit)
     jobs = db.list_jobs(limit=limit)
     return {"tasks": tasks, "jobs": jobs}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Projects — scans E:\Project\Master\ for real project data
+# ══════════════════════════════════════════════════════════════════════
+
+MASTER_DIR = Path(os.environ.get(
+    "MASTER_PROJECT_DIR",
+    Path(__file__).resolve().parent.parent.parent.parent / "Master"
+))
+
+# Registry of known projects with metadata
+PROJECT_REGISTRY = {
+    "agentai-agency": {
+        "name": "AgentAI Agency",
+        "type": "python",
+        "category": "core",
+        "description": "AI Company OS — orchestrator, agents, control plane",
+        "port": 8000,
+        "tech": ["Python", "FastAPI", "LangGraph", "SQLite"],
+        "github": "liemdo28/AgentAi-Angency",
+    },
+    "BakudanWebsite_Sub": {
+        "name": "Bakudan Ramen Website",
+        "type": "html",
+        "category": "website",
+        "description": "Official restaurant website — menu, locations, ordering",
+        "port": None,
+        "tech": ["HTML", "CSS", "JavaScript"],
+        "github": "liemdo28/bakudanwebsite_sub",
+    },
+    "BakudanWebsite_Sub2": {
+        "name": "Bakudan Ramen Website v2",
+        "type": "html",
+        "category": "website",
+        "description": "Secondary iteration of restaurant website",
+        "port": None,
+        "tech": ["HTML", "CSS", "JavaScript"],
+        "github": "liemdo28/bakudanwebsite_sub2",
+    },
+    "RawWebsite": {
+        "name": "Raw Sushi Bistro Website",
+        "type": "html",
+        "category": "website",
+        "description": "Restaurant website — menu, blog, analytics",
+        "port": None,
+        "tech": ["HTML", "CSS", "JavaScript"],
+        "github": "liemdo28/rawwebsite",
+    },
+    "dashboard.bakudanramen.com": {
+        "name": "TaskFlow Dashboard",
+        "type": "php",
+        "category": "operations",
+        "description": "Project management — tasks, calendar, notifications, PWA",
+        "port": None,
+        "tech": ["PHP", "MySQL", "PWA"],
+        "github": "liemdo28/dashboard.bakudanramen.com",
+    },
+    "growth-dashboard": {
+        "name": "Growth Dashboard",
+        "type": "node",
+        "category": "analytics",
+        "description": "Growth analytics dashboard on Cloudflare Pages",
+        "port": 8789,
+        "tech": ["Node.js", "Wrangler", "Cloudflare Pages"],
+        "github": "liemdo28/growth-dashboard",
+    },
+    "integration-full": {
+        "name": "Toast POS Integration",
+        "type": "python",
+        "category": "operations",
+        "description": "Desktop app — Toast POS to QuickBooks sync",
+        "port": None,
+        "tech": ["Python", "CustomTkinter", "Playwright"],
+        "github": "liemdo28/intergration-full",
+    },
+    "review-dashboard": {
+        "name": "ReviewOps Dashboard",
+        "type": "node",
+        "category": "reviews",
+        "description": "Next.js frontend for review management system",
+        "port": 3000,
+        "tech": ["Next.js", "React", "Tailwind", "shadcn/ui"],
+        "github": None,
+    },
+    "review-management-mcp": {
+        "name": "Review MCP Server",
+        "type": "node",
+        "category": "reviews",
+        "description": "MCP server for Yelp & Google review management",
+        "port": None,
+        "tech": ["TypeScript", "MCP SDK", "Electron"],
+        "github": "liemdo28/review-management-mcp",
+    },
+    "review-system": {
+        "name": "Review Automation System",
+        "type": "python",
+        "category": "reviews",
+        "description": "Auto-fetch reviews, AI reply generation, auto-post",
+        "port": 8000,
+        "tech": ["FastAPI", "PostgreSQL", "Redis", "OpenAI"],
+        "github": "liemdo28/review-automation-system",
+    },
+}
+
+# Store registry (Bakudan Ramen locations)
+STORE_REGISTRY = {
+    "B1": {"name": "Bakudan Ramen — Alamo Ranch", "address": "12602 W Interstate 10, San Antonio, TX", "brand": "bakudan"},
+    "B2": {"name": "Bakudan Ramen — La Cantera", "address": "15900 La Cantera Pkwy, San Antonio, TX", "brand": "bakudan"},
+    "B3": {"name": "Bakudan Ramen — Stone Oak", "address": "22211 IH 10 W, San Antonio, TX", "brand": "bakudan"},
+    "RAW": {"name": "Raw Sushi Bistro", "address": "5756 Pacific Ave, Stockton, CA", "brand": "raw"},
+    "COPPER": {"name": "Copper Bowl", "address": "TBD", "brand": "copper"},
+    "IFT": {"name": "International Food Truck", "address": "Mobile", "brand": "ift"},
+}
+
+
+def _git_info(project_path: Path) -> dict:
+    """Extract git branch, last commit, and status from a project."""
+    info = {"branch": None, "last_commit": None, "last_commit_date": None, "dirty": False}
+    git_dir = project_path / ".git"
+    if not git_dir.exists():
+        return info
+    try:
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(project_path), capture_output=True, text=True, timeout=5
+        )
+        if branch.returncode == 0:
+            info["branch"] = branch.stdout.strip()
+
+        log = subprocess.run(
+            ["git", "log", "-1", "--format=%s|||%ai"],
+            cwd=str(project_path), capture_output=True, text=True, timeout=5
+        )
+        if log.returncode == 0 and "|||" in log.stdout:
+            parts = log.stdout.strip().split("|||")
+            info["last_commit"] = parts[0]
+            info["last_commit_date"] = parts[1]
+
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(project_path), capture_output=True, text=True, timeout=5
+        )
+        if status.returncode == 0:
+            info["dirty"] = len(status.stdout.strip()) > 0
+    except Exception:
+        pass
+    return info
+
+
+def _detect_status(project_path: Path) -> str:
+    """Detect if a project is healthy based on existence of key files."""
+    if not project_path.exists():
+        return "offline"
+    marker_files = [
+        "package.json", "requirements.txt", "composer.json",
+        "index.html", "app.py", "main.py", "pyproject.toml",
+        "README.md", ".gitignore", "Makefile", "tsconfig.json",
+        "index.php", "launch.bat", "setup.py",
+    ]
+    # Also check subdirectories for common entry points
+    sub_markers = ["src/main.py", "app/main.py", "desktop-app/app.py"]
+    if any((project_path / f).exists() for f in marker_files + sub_markers):
+        return "online"
+    return "warning"
+
+
+@app.get("/projects")
+def list_projects():
+    """List all projects from the Master directory with live git info."""
+    projects = []
+    for dir_name, meta in PROJECT_REGISTRY.items():
+        project_path = MASTER_DIR / dir_name
+        git = _git_info(project_path)
+        status = _detect_status(project_path)
+
+        projects.append({
+            "id": dir_name,
+            "name": meta["name"],
+            "type": meta["type"],
+            "category": meta["category"],
+            "description": meta["description"],
+            "port": meta["port"],
+            "tech": meta["tech"],
+            "github": meta["github"],
+            "status": status,
+            "exists": project_path.exists(),
+            "branch": git["branch"],
+            "last_commit": git["last_commit"],
+            "last_commit_date": git["last_commit_date"],
+            "dirty": git["dirty"],
+        })
+    return projects
+
+
+@app.get("/projects/{project_id}")
+def get_project(project_id: str):
+    """Get detailed project info."""
+    meta = PROJECT_REGISTRY.get(project_id)
+    if not meta:
+        raise HTTPException(404, "Project not found")
+
+    project_path = MASTER_DIR / project_id
+    git = _git_info(project_path)
+    status = _detect_status(project_path)
+
+    # Count files
+    file_count = 0
+    if project_path.exists():
+        for f in project_path.rglob("*"):
+            if f.is_file() and ".git" not in f.parts and "node_modules" not in f.parts:
+                file_count += 1
+
+    return {
+        "id": project_id,
+        **meta,
+        "status": status,
+        "exists": project_path.exists(),
+        "path": str(project_path),
+        "file_count": file_count,
+        **git,
+    }
+
+
+@app.get("/stores")
+def list_stores():
+    """List all store locations."""
+    return [{"id": sid, **sdata} for sid, sdata in STORE_REGISTRY.items()]
+
+
+@app.get("/stores/{store_id}")
+def get_store(store_id: str):
+    """Get store details."""
+    store = STORE_REGISTRY.get(store_id)
+    if not store:
+        raise HTTPException(404, "Store not found")
+    return {"id": store_id, **store}

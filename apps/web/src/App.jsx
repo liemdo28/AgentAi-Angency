@@ -5,6 +5,8 @@ import Issues from './pages/Issues';
 import IssueDetail from './pages/IssueDetail';
 import Routines from './pages/Routines';
 import Goals from './pages/Goals';
+import Projects from './pages/Projects';
+import Stores from './pages/Stores';
 import OrgChart from './pages/OrgChart';
 import Costs from './pages/Costs';
 import Activity from './pages/Activity';
@@ -24,6 +26,8 @@ const Icon = ({ name }) => {
     costs: <svg className="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1v14M5 4h5a2 2 0 010 4H6a2 2 0 000 4h5" stroke="currentColor" strokeWidth="1.5" fill="none"/></svg>,
     activity: <svg className="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M1 8h3l2-5 3 10 2-5h4" stroke="currentColor" strokeWidth="1.5" fill="none"/></svg>,
     approvals: <svg className="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M4 8l3 3 5-6" stroke="currentColor" strokeWidth="2" fill="none"/></svg>,
+    projects: <svg className="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><rect x="2" y="2" width="12" height="12" rx="2" fill="none" stroke="currentColor" strokeWidth="1.3"/><path d="M2 6h12" stroke="currentColor" strokeWidth="1.3"/><circle cx="4.5" cy="4" r="0.8"/><circle cx="7" cy="4" r="0.8"/></svg>,
+    stores: <svg className="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 6l1-4h10l1 4M2 6v8h12V6M4 14v-4h4v4M10 9h2v2h-2z" stroke="currentColor" strokeWidth="1.2" fill="none"/></svg>,
     settings: <svg className="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="2.5" fill="none" stroke="currentColor" strokeWidth="1.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.5 1.5M11.5 11.5L13 13M13 3l-1.5 1.5M4.5 11.5L3 13" stroke="currentColor" strokeWidth="1.2"/></svg>,
   };
   return icons[name] || null;
@@ -61,6 +65,8 @@ export default function App() {
           <div className="sidebar-section">
             <div className="sidebar-section-title">Company</div>
             <NavLink to="/" end><Icon name="dashboard" /> Overview</NavLink>
+            <NavLink to="/projects"><Icon name="projects" /> Projects</NavLink>
+            <NavLink to="/stores"><Icon name="stores" /> Stores</NavLink>
             <NavLink to="/org"><Icon name="org" /> Org Chart</NavLink>
             <NavLink to="/costs"><Icon name="costs" /> Costs</NavLink>
             <NavLink to="/activity"><Icon name="activity" /> Activity</NavLink>
@@ -84,6 +90,8 @@ export default function App() {
             <Route path="/issues/:id" element={<IssueDetail />} />
             <Route path="/routines" element={<Routines />} />
             <Route path="/goals" element={<Goals />} />
+            <Route path="/projects" element={<Projects />} />
+            <Route path="/stores" element={<Stores />} />
             <Route path="/org" element={<OrgChart />} />
             <Route path="/costs" element={<Costs />} />
             <Route path="/activity" element={<Activity />} />

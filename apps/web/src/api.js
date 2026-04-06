@@ -39,3 +39,11 @@ export const resolveApproval = (id, data) =>
 
 // Activity
 export const getActivity = () => request('/activity');
+
+// Projects
+export const listProjects = () => request('/projects');
+export const getProject = (id) => request(`/projects/${id}`);
+
+// Stores
+export const listStores = () => request('/stores');
+export const getStore = (id) => request(`/stores/${id}`);
