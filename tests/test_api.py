@@ -32,6 +32,7 @@ modules:
 from __future__ import annotations
 
 import base64
+import importlib
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -79,7 +80,9 @@ with (
     from src.api import app
     import src.api as _api_mod
     # Capture all modules loaded during api import so we can restore them.
-    _api_modules_snapshot = {k: v for k, v in sys.modules.items() if k not in _before_import}
+    _api_modules_snapshot = {
+        k: v for k, v in sys.modules.items() if k not in _before_import and k != "store"
+    }
 
 # patch.dict restores sys.modules on exit, removing every module that was
 # added during the block (models, engine, store, policies, src, src.api, …).
@@ -88,6 +91,8 @@ with (
 #   2. Tests that do `from models import HandoffNotFoundError` get the same
 #      class object that api.py already bound — ensuring except-clauses match.
 sys.modules.update(_api_modules_snapshot)
+sys.modules.pop("store", None)
+sys.modules["store"] = importlib.import_module("store")
 
 # ---------------------------------------------------------------------------
 # Test client — startup / shutdown lifespan runs automatically.
@@ -548,14 +553,12 @@ def test_get_task_nonexistent_returns_404():
     assert "detail" in resp.json()
 
 
-# 20. POST /tasks/{id}/run → 200 with task_id, status, score, final_output, errors
-def test_run_task_returns_200_with_result():
+# 20. POST /tasks/{id}/run → 202 with queued status
+def test_run_task_returns_202_with_queued_status():
     """
-    run_task_sync is imported inside the run_task function body via
-    ``from src.task_runner import run_task_sync`` — patch the defining module.
+    The API now queues work asynchronously and returns 202 immediately.
     """
     task = _make_task()
-    run_result = _make_run_result(task.id)
 
     mock_repo = MagicMock()
     mock_repo.get.return_value = task
@@ -563,17 +566,16 @@ def test_run_task_returns_200_with_result():
     with (
         patch(PATCH_INIT_DB),
         patch(PATCH_TASK_REPO, return_value=mock_repo),
-        patch(PATCH_RUN_TASK_SYNC, return_value=run_result),
+        patch("src.api._run_task_background"),
     ):
         resp = client.post(f"/tasks/{task.id}/run")
 
-    assert resp.status_code == 200
+    assert resp.status_code == 202
     body = resp.json()
     assert body["task_id"] == task.id
-    assert body["status"] == "passed"
-    assert body["score"] == 92.5
-    assert "final_output" in body
-    assert "errors" in body
+    assert body["status"] == "IN_PROGRESS"
+    assert "queued" in body["message"].lower()
+    mock_repo.upsert.assert_called_once()
 
 
 # 21. POST /tasks/{id}/run nonexistent id → 404
@@ -758,17 +760,9 @@ def test_get_review_history_returns_list_in_history_field():
 # ADDITIONAL EDGE-CASE TESTS (total 30+)
 # ===========================================================================
 
-# 29. Run task response shape: task_id, status, score, final_output, errors
+# 29. Run task response shape: task_id, status, message
 def test_run_task_response_shape():
     task = _make_task()
-    run_result = {
-        "task_id": task.id,
-        "status": "passed",
-        "score": 95.0,
-        "final_output": "Done.",
-        "retry_count": 0,
-        "errors": [],
-    }
 
     mock_repo = MagicMock()
     mock_repo.get.return_value = task
@@ -776,16 +770,15 @@ def test_run_task_response_shape():
     with (
         patch(PATCH_INIT_DB),
         patch(PATCH_TASK_REPO, return_value=mock_repo),
-        patch(PATCH_RUN_TASK_SYNC, return_value=run_result),
+        patch("src.api._run_task_background"),
     ):
         resp = client.post(f"/tasks/{task.id}/run")
 
-    assert resp.status_code == 200
+    assert resp.status_code == 202
     body = resp.json()
-    for field in ("task_id", "status", "score", "final_output", "errors"):
+    for field in ("task_id", "status", "message"):
         assert field in body, f"Missing field in RunTaskResult: {field}"
-    assert isinstance(body["errors"], list)
-    assert isinstance(body["score"], float)
+    assert isinstance(body["message"], str)
 
 
 # 30. Blank department name → 422 (Pydantic dept_not_blank validator)
@@ -877,21 +870,21 @@ def test_data_collection_request_failed_status_returns_502():
     assert resp.status_code == 502
 
 
-# 37. RuntimeError in run_task_sync → 422
-def test_run_task_runtime_error_returns_422():
+# 37. enqueue failure in run_task → 500
+def test_run_task_enqueue_runtime_error_returns_500():
     task = _make_task()
 
     mock_repo = MagicMock()
     mock_repo.get.return_value = task
+    mock_repo.upsert.side_effect = RuntimeError("Queue exploded")
 
     with (
         patch(PATCH_INIT_DB),
         patch(PATCH_TASK_REPO, return_value=mock_repo),
-        patch(PATCH_RUN_TASK_SYNC, side_effect=RuntimeError("Pipeline exploded")),
     ):
         resp = client.post(f"/tasks/{task.id}/run")
 
-    assert resp.status_code == 422
+    assert resp.status_code == 500
     assert "detail" in resp.json()
 
 

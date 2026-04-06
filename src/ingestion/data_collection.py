@@ -173,25 +173,26 @@ def process_inbound_email(
                 "status": "duplicate",
                 "errors": [f"Duplicate email: {message_id}"],
             }
-        try:
-            from src.db.connection import get_db, init_db
-            init_db()
-            existing = get_db().execute(
-                "SELECT id FROM email_queue WHERE id = ?", (message_id,)
-            ).fetchone()
-            if existing:
-                logger.warning("Duplicate email detected (Message-ID: %s), skipping", message_id)
-                return {
-                    "account_id": None,
-                    "saved_files": [],
-                    "parsed_kpis": {},
-                    "file_summaries": [],
-                    "task_id": None,
-                    "status": "duplicate",
-                    "errors": [f"Duplicate email: {message_id}"],
-                }
-        except Exception as dedup_exc:
-            logger.warning("Dedup DB check failed, proceeding: %s", dedup_exc)
+        if trigger_task:
+            try:
+                from src.db.connection import get_db, init_db
+                init_db()
+                existing = get_db().execute(
+                    "SELECT id FROM email_queue WHERE id = ?", (message_id,)
+                ).fetchone()
+                if existing:
+                    logger.warning("Duplicate email detected (Message-ID: %s), skipping", message_id)
+                    return {
+                        "account_id": None,
+                        "saved_files": [],
+                        "parsed_kpis": {},
+                        "file_summaries": [],
+                        "task_id": None,
+                        "status": "duplicate",
+                        "errors": [f"Duplicate email: {message_id}"],
+                    }
+            except Exception as dedup_exc:
+                logger.warning("Dedup DB check failed, proceeding: %s", dedup_exc)
 
     # ── 1. Parse headers ──────────────────────────────────────────────
     parsed = parse_message(raw_bytes)
@@ -300,17 +301,18 @@ def process_inbound_email(
     # Mark as processed in DB for persistent deduplication
     if message_id:
         try:
-            from src.db.connection import get_db, init_db
-            init_db()
-            db = get_db()
-            db.execute(
-                """INSERT OR IGNORE INTO email_queue
-                   (id, account_id, sender_email, subject, status, received_at)
-                   VALUES (?, ?, ?, ?, 'processed', ?)""",
-                (message_id, account_id or "", sender, subject,
-                 datetime.now(timezone.utc).isoformat()),
-            )
-            db.commit()
+            if trigger_task:
+                from src.db.connection import get_db, init_db
+                init_db()
+                db = get_db()
+                db.execute(
+                    """INSERT OR IGNORE INTO email_queue
+                       (id, account_id, sender_email, subject, status, received_at)
+                       VALUES (?, ?, ?, ?, 'processed', ?)""",
+                    (message_id, account_id or "", sender, subject,
+                     datetime.now(timezone.utc).isoformat()),
+                )
+                db.commit()
         except Exception as persist_exc:
             logger.warning("Failed to persist email dedup record: %s", persist_exc)
         finally:

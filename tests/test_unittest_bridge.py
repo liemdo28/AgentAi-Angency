@@ -6,19 +6,28 @@ This bridge exposes one unittest TestCase that runs pytest internally.
 """
 from __future__ import annotations
 
+import subprocess
+import sys
 import unittest
-
-import pytest
 
 
 class PytestBridgeTest(unittest.TestCase):
     def test_pytest_suites(self) -> None:
-        exit_code = pytest.main(
+        proc = subprocess.run(
             [
+                sys.executable,
+                "-m",
+                "pytest",
                 "-q",
                 "tests/test_engine.py",
                 "tests/test_store.py",
                 "tests/test_validator.py",
-            ]
+            ],
+            capture_output=True,
+            text=True,
         )
-        self.assertEqual(exit_code, 0, f"pytest suite failed with exit code {exit_code}")
+        self.assertEqual(
+            proc.returncode,
+            0,
+            f"pytest suite failed with exit code {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}",
+        )

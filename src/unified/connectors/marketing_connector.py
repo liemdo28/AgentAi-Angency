@@ -49,8 +49,8 @@ class MarketingConnector(BaseConnector):
         self._base_url = settings.marketing_base_url.rstrip("/")
         self._token = settings.marketing_api_token
         self._timeout = settings.marketing_timeout
-        # Growth Dashboard shares the bakudanramen.com domain
-        self._growth_base_url = getattr(settings, "growth_base_url", "").rstrip("/") or "https://bakudanramen.com/growth-dashboard/api"
+        self._growth_api_key = getattr(settings, "growth_api_key", "")
+        self._growth_base_url = getattr(settings, "growth_base_url", "").rstrip("/") or "https://marketing.bakudanramen.com/api"
 
     @property
     def base_url(self) -> str:
@@ -298,7 +298,10 @@ class MarketingConnector(BaseConnector):
         start = datetime.now(timezone.utc)
         try:
             async with httpx.AsyncClient(timeout=float(self._timeout)) as client:
-                response = await client.request(method, url, params=params)
+                headers = {"Accept": "application/json"}
+                if self._growth_api_key:
+                    headers["Authorization"] = f"Bearer {self._growth_api_key}"
+                response = await client.request(method, url, params=params, headers=headers)
                 duration_ms = (datetime.now(timezone.utc) - start).total_seconds() * 1000
                 try:
                     data = response.json()

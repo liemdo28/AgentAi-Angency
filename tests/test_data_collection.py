@@ -39,6 +39,9 @@ from src.ingestion.email_ingestion import (
     parse_message,
 )
 
+for _cleanup in ["src.db.connection", "src.db.repositories.task_repo"]:
+    sys.modules.pop(_cleanup, None)
+
 
 # ------------------------------------------------------------------ #
 # Fixture helpers                                                      #
@@ -274,7 +277,7 @@ class TestSaveAttachment:
         from src.ingestion.data_collection import _save_attachment
         part = self._make_part("f.csv", b"x")
         path = _save_attachment(part, str(tmp_path), "acct-1", "2026:03:01 10:00")
-        assert ":" not in path
+        assert "2026-03-01_10-00" in path
 
     def test_no_filename_defaults_to_attachment(self, tmp_path):
         from src.ingestion.data_collection import _save_attachment

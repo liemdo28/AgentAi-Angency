@@ -10,7 +10,7 @@ import os
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Optional, get_origin
 
 try:
     from pydantic_settings import BaseSettings
@@ -68,7 +68,7 @@ class Settings(BaseSettings if _has_pydantic_settings else object):
     taskflow_timeout: int = 60
 
     # ── Growth Dashboard (DreamHost PHP API) ─────────────
-    growth_base_url: str = ""
+    growth_base_url: str = "https://marketing.bakudanramen.com/api"
     growth_api_key: str = ""
     growth_timeout: int = 60
 
@@ -108,12 +108,6 @@ class Settings(BaseSettings if _has_pydantic_settings else object):
 
     else:
         # Manual .env loading fallback
-        def __init__(self, **kwargs):
-            super().__init__(**kwargs)
-            env_path = _find_env_file()
-            if env_path and env_path.exists():
-                self._load_env(env_path)
-
         @staticmethod
         def _load_env(path: Path) -> None:
             """Load key=value lines from .env file."""
@@ -126,12 +120,48 @@ class Settings(BaseSettings if _has_pydantic_settings else object):
                 key, _, value = line.partition("=")
                 key = key.strip()
                 value = value.strip().strip('"').strip("'")
-                if key and key.isupper() and not hasattr(Settings, key):
+                if key and key.isupper():
                     os.environ.setdefault(key, value)
 
+        def _apply_env_overrides(self, kwargs: dict[str, object]) -> None:
+            """Map UPPERCASE env vars onto lowercase settings fields."""
+            for field_name, annotation in self.__annotations__.items():
+                if field_name in kwargs:
+                    setattr(self, field_name, kwargs[field_name])
+                    continue
+                env_key = field_name.upper()
+                if env_key not in os.environ:
+                    continue
+                raw = os.environ[env_key]
+                setattr(self, field_name, self._coerce_env_value(raw, annotation))
+
+        @staticmethod
+        def _coerce_env_value(raw: str, annotation: object) -> object:
+            """Coerce env strings into the declared field type."""
+            origin = get_origin(annotation)
+            if annotation is Path:
+                return Path(raw)
+            if annotation is int:
+                return int(raw)
+            if annotation is bool:
+                return raw.strip().lower() in {"1", "true", "yes", "on"}
+            if origin is list:
+                value = raw.strip()
+                if value.startswith("[") and value.endswith("]"):
+                    items = value.strip("[]")
+                    return [item.strip().strip('"').strip("'") for item in items.split(",") if item.strip()]
+                return [item.strip() for item in value.split(",") if item.strip()]
+            return raw
+
     def __init__(self, **kwargs):
-        # Ensure upload dir exists
-        super().__init__(**kwargs)
+        if _has_pydantic_settings:
+            super().__init__(**kwargs)
+        else:
+            super().__init__()
+            env_path = _find_env_file()
+            if env_path and env_path.exists():
+                self._load_env(env_path)
+            self._apply_env_overrides(kwargs)
         self.upload_dir.mkdir(parents=True, exist_ok=True)
 
     @property
