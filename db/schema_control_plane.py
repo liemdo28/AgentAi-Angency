@@ -99,6 +99,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_cp_project_snapshots_project_machine
 CREATE INDEX IF NOT EXISTS idx_cp_project_snapshots_project_received
     ON cp_project_snapshots(project_id, received_at DESC);
 
+-- EDGE MACHINE REGISTRY ------------------------------------------------------
+CREATE TABLE IF NOT EXISTS cp_edge_machines (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    machine_id TEXT NOT NULL,
+    machine_name TEXT NOT NULL,
+    source_type TEXT NOT NULL DEFAULT 'edge',
+    app_version TEXT DEFAULT '',
+    last_seen_at TEXT,
+    last_snapshot_at TEXT,
+    last_command_at TEXT,
+    paused INTEGER NOT NULL DEFAULT 0,
+    draining INTEGER NOT NULL DEFAULT 0,
+    pause_reason TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cp_edge_machines_project_machine
+    ON cp_edge_machines(project_id, machine_id);
+
 -- EDGE COMMAND QUEUE ---------------------------------------------------------
 CREATE TABLE IF NOT EXISTS cp_edge_commands (
     id TEXT PRIMARY KEY,

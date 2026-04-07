@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { createProjectCommand, executeSmartIssue, listProjects } from '../api';
+import { createProjectCommand, executeSmartIssue, listProjects, updateProjectMachineControl } from '../api';
 
 function formatDate(value) {
   if (!value) return '-';
@@ -21,6 +21,7 @@ export default function IntegrationOps() {
   const [loading, setLoading] = useState(true);
   const [busySuggestionId, setBusySuggestionId] = useState('');
   const [busyCommandId, setBusyCommandId] = useState('');
+  const [busyMachineId, setBusyMachineId] = useState('');
 
   const load = async () => {
     setLoading(true);
@@ -107,6 +108,18 @@ export default function IntegrationOps() {
       window.alert(`Could not queue command: ${error.message}`);
     } finally {
       setBusyCommandId('');
+    }
+  };
+
+  const handleMachineControl = async (machineId, data) => {
+    setBusyMachineId(machineId);
+    try {
+      await updateProjectMachineControl('integration-full', machineId, data);
+      await load();
+    } catch (error) {
+      window.alert(`Could not update machine control: ${error.message}`);
+    } finally {
+      setBusyMachineId('');
     }
   };
 
@@ -314,13 +327,38 @@ export default function IntegrationOps() {
                   <div>
                     <div className="project-feed-title">{node.machine_name || 'Unknown machine'}</div>
                     <div className="project-feed-sub">
-                      {(node.source_type || 'integration-full')} · {formatDateTime(node.received_at)}
+                      {(node.source_type || 'integration-full')} · Snapshot: {formatDateTime(node.received_at)}
+                    </div>
+                    <div className="project-feed-sub">
+                      Last seen: {formatDateTime(node.last_seen_at)} · {node.online ? 'online' : 'offline'}
                     </div>
                     <div className="project-feed-sub">
                       Download gaps: {node.summary?.download_gap_count ?? 0} · QB gaps: {node.summary?.qb_gap_count ?? 0}
                     </div>
+                    {(node.paused || node.draining || node.pause_reason) && (
+                      <div className="project-feed-sub">
+                        {node.paused ? 'paused' : 'active'} · {node.draining ? 'draining' : 'dispatching'}
+                        {node.pause_reason ? ` · ${node.pause_reason}` : ''}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => handleMachineControl(node.machine_id, { paused: !node.paused, pause_reason: node.paused ? '' : 'Paused from Integration Ops' })}
+                        disabled={busyMachineId === node.machine_id}
+                      >
+                        {node.paused ? 'Resume' : 'Pause'}
+                      </button>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => handleMachineControl(node.machine_id, { draining: !node.draining, cancel_pending: !node.draining })}
+                        disabled={busyMachineId === node.machine_id}
+                      >
+                        {node.draining ? 'Clear Drain' : 'Drain Queue'}
+                      </button>
+                    </div>
                   </div>
-                  <span className="badge success">{node.machine_id || 'node'}</span>
+                  <span className={`badge ${node.online ? 'success' : 'pending'}`}>{node.machine_id || 'node'}</span>
                 </div>
               ))}
             </div>

@@ -63,6 +63,14 @@ class ControlPlaneDB:
         item["result"] = self._decode_json(item.get("result_json"))
         return item
 
+    def _hydrate_edge_machine(self, row: sqlite3.Row | None) -> Optional[dict]:
+        if not row:
+            return None
+        item = dict(row)
+        item["paused"] = bool(item.get("paused"))
+        item["draining"] = bool(item.get("draining"))
+        return item
+
     def _ensure_edge_command_columns(self, conn: sqlite3.Connection) -> None:
         existing = {
             row["name"]
@@ -83,6 +91,60 @@ class ControlPlaneDB:
             CREATE INDEX IF NOT EXISTS idx_cp_edge_commands_project_lease
                 ON cp_edge_commands(project_id, machine_id, lease_expires_at)
             """
+        )
+
+    def _upsert_edge_machine(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        project_id: str,
+        machine_id: str,
+        machine_name: str,
+        source_type: str = "edge",
+        app_version: str = "",
+        last_seen_at: str | None = None,
+        last_snapshot_at: str | None = None,
+        last_command_at: str | None = None,
+    ) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        machine_row_id = str(uuid4())
+        conn.execute(
+            """
+            INSERT INTO cp_edge_machines (
+                id,
+                project_id,
+                machine_id,
+                machine_name,
+                source_type,
+                app_version,
+                last_seen_at,
+                last_snapshot_at,
+                last_command_at,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(project_id, machine_id) DO UPDATE SET
+                machine_name = excluded.machine_name,
+                source_type = excluded.source_type,
+                app_version = excluded.app_version,
+                last_seen_at = COALESCE(excluded.last_seen_at, cp_edge_machines.last_seen_at),
+                last_snapshot_at = COALESCE(excluded.last_snapshot_at, cp_edge_machines.last_snapshot_at),
+                last_command_at = COALESCE(excluded.last_command_at, cp_edge_machines.last_command_at),
+                updated_at = excluded.updated_at
+            """,
+            (
+                machine_row_id,
+                project_id,
+                machine_id,
+                machine_name,
+                source_type,
+                app_version,
+                last_seen_at,
+                last_snapshot_at,
+                last_command_at,
+                now,
+                now,
+            ),
         )
 
     # ── goals ─────────────────────────────────────────────────────────
@@ -351,6 +413,16 @@ class ControlPlaneDB:
         row_id = str(uuid4())
         conn = self._conn()
         try:
+            self._upsert_edge_machine(
+                conn,
+                project_id=project_id,
+                machine_id=machine_id,
+                machine_name=machine_name,
+                source_type=source_type,
+                app_version=app_version,
+                last_seen_at=now,
+                last_snapshot_at=now,
+            )
             conn.execute(
                 """
                 INSERT INTO cp_project_snapshots (
@@ -500,6 +572,102 @@ class ControlPlaneDB:
         finally:
             conn.close()
 
+    def list_edge_machines(self, project_id: str) -> List[dict]:
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM cp_edge_machines
+                WHERE project_id = ?
+                ORDER BY machine_name ASC, machine_id ASC
+                """,
+                (project_id,),
+            ).fetchall()
+            return [item for item in (self._hydrate_edge_machine(row) for row in rows) if item]
+        finally:
+            conn.close()
+
+    def get_edge_machine(self, *, project_id: str, machine_id: str) -> Optional[dict]:
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM cp_edge_machines
+                WHERE project_id = ? AND machine_id = ?
+                """,
+                (project_id, machine_id),
+            ).fetchone()
+            return self._hydrate_edge_machine(row)
+        finally:
+            conn.close()
+
+    def set_edge_machine_control(
+        self,
+        *,
+        project_id: str,
+        machine_id: str,
+        paused: bool | None = None,
+        draining: bool | None = None,
+        pause_reason: str | None = None,
+    ) -> Optional[dict]:
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT * FROM cp_edge_machines WHERE project_id = ? AND machine_id = ?",
+                (project_id, machine_id),
+            ).fetchone()
+            if not row:
+                return None
+            current = dict(row)
+            next_paused = int(current["paused"] if paused is None else paused)
+            next_draining = int(current["draining"] if draining is None else draining)
+            next_reason = current.get("pause_reason", "")
+            if pause_reason is not None:
+                next_reason = pause_reason
+            elif not next_paused:
+                next_reason = ""
+            now = datetime.now(timezone.utc).isoformat()
+            conn.execute(
+                """
+                UPDATE cp_edge_machines
+                SET paused = ?, draining = ?, pause_reason = ?, updated_at = ?
+                WHERE project_id = ? AND machine_id = ?
+                """,
+                (next_paused, next_draining, next_reason, now, project_id, machine_id),
+            )
+            conn.commit()
+            refreshed = conn.execute(
+                "SELECT * FROM cp_edge_machines WHERE project_id = ? AND machine_id = ?",
+                (project_id, machine_id),
+            ).fetchone()
+            return self._hydrate_edge_machine(refreshed)
+        finally:
+            conn.close()
+
+    def cancel_pending_edge_commands(self, *, project_id: str, machine_id: str, reason: str = "Queue drained by operator.") -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._conn()
+        try:
+            cursor = conn.execute(
+                """
+                UPDATE cp_edge_commands
+                SET status = 'cancelled',
+                    error_message = ?,
+                    completed_at = ?,
+                    updated_at = ?,
+                    lease_expires_at = NULL,
+                    last_heartbeat_at = NULL
+                WHERE project_id = ? AND machine_id = ? AND status = 'pending'
+                """,
+                (reason, now, now, project_id, machine_id),
+            )
+            conn.commit()
+            return cursor.rowcount
+        finally:
+            conn.close()
+
     def list_edge_commands(
         self,
         *,
@@ -581,6 +749,12 @@ class ControlPlaneDB:
         ).isoformat()
         conn = self._conn()
         try:
+            machine = conn.execute(
+                "SELECT paused, draining FROM cp_edge_machines WHERE project_id = ? AND machine_id = ?",
+                (project_id, machine_id),
+            ).fetchone()
+            if machine and (machine["paused"] or machine["draining"]):
+                return None
             self._expire_stale_edge_commands(conn, project_id=project_id, machine_id=machine_id, now=now)
             conn.commit()
             row = conn.execute(
@@ -615,6 +789,14 @@ class ControlPlaneDB:
                 """,
                 (now, now, datetime.fromtimestamp(lease_expires_at, tz=timezone.utc).isoformat(), command_id),
             )
+            self._upsert_edge_machine(
+                conn,
+                project_id=project_id,
+                machine_id=machine_id,
+                machine_name=row["machine_name"],
+                last_seen_at=now,
+                last_command_at=now,
+            )
             conn.commit()
             refreshed = conn.execute("SELECT * FROM cp_edge_commands WHERE id = ?", (command_id,)).fetchone()
             return self._hydrate_edge_command(refreshed)
@@ -639,8 +821,17 @@ class ControlPlaneDB:
                 """,
                 (now, now, lease_expires_at, now, command_id),
             )
-            conn.commit()
             row = conn.execute("SELECT * FROM cp_edge_commands WHERE id = ?", (command_id,)).fetchone()
+            if row:
+                self._upsert_edge_machine(
+                    conn,
+                    project_id=row["project_id"],
+                    machine_id=row["machine_id"],
+                    machine_name=row["machine_name"],
+                    last_seen_at=now,
+                    last_command_at=now,
+                )
+            conn.commit()
             return self._hydrate_edge_command(row)
         finally:
             conn.close()
@@ -659,8 +850,17 @@ class ControlPlaneDB:
                 """,
                 (now, lease_expires_at, now, command_id),
             )
-            conn.commit()
             row = conn.execute("SELECT * FROM cp_edge_commands WHERE id = ?", (command_id,)).fetchone()
+            if row:
+                self._upsert_edge_machine(
+                    conn,
+                    project_id=row["project_id"],
+                    machine_id=row["machine_id"],
+                    machine_name=row["machine_name"],
+                    last_seen_at=now,
+                    last_command_at=now,
+                )
+            conn.commit()
             return self._hydrate_edge_command(row)
         finally:
             conn.close()
@@ -692,8 +892,17 @@ class ControlPlaneDB:
                     command_id,
                 ),
             )
-            conn.commit()
             row = conn.execute("SELECT * FROM cp_edge_commands WHERE id = ?", (command_id,)).fetchone()
+            if row:
+                self._upsert_edge_machine(
+                    conn,
+                    project_id=row["project_id"],
+                    machine_id=row["machine_id"],
+                    machine_name=row["machine_name"],
+                    last_seen_at=now,
+                    last_command_at=now,
+                )
+            conn.commit()
             return self._hydrate_edge_command(row)
         finally:
             conn.close()

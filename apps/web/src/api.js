@@ -51,6 +51,9 @@ export const getProject = (id) => request(`/projects/${id}`);
 export const checkProjectHealth = (id) => request(`/projects/${id}/health`);
 export const listProjectCommands = (id, machineId) => request(`/projects/${id}/commands${machineId ? `?machine_id=${machineId}` : ''}`);
 export const createProjectCommand = (id, data) => request(`/projects/${id}/commands`, { method: 'POST', body: JSON.stringify(data) });
+export const listProjectMachines = (id) => request(`/projects/${id}/machines`);
+export const updateProjectMachineControl = (id, machineId, data) =>
+  request(`/projects/${id}/machines/${machineId}/control`, { method: 'POST', body: JSON.stringify(data) });
 
 // Stores
 export const listStores = () => request('/stores');

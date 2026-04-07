@@ -176,3 +176,59 @@ def test_edge_command_retries_then_fails_after_lease_expiry(tmp_path):
     assert none_left is None
     latest = db.list_edge_commands(project_id="integration-full", machine_id="stockton-frontdesk-01", limit=1)[0]
     assert latest["status"] == "failed"
+
+
+def test_machine_control_blocks_dispatch_and_can_drain_queue(monkeypatch, tmp_path):
+    temp_db = ControlPlaneDB(db_path=str(tmp_path / "control-plane.db"))
+    monkeypatch.setattr(api_main, "db", temp_db)
+    monkeypatch.setattr(api_main, "MASTER_DIR", Path(tmp_path / "Master"))
+    monkeypatch.setenv("AGENTAI_EDGE_TOKEN", "secret-token")
+    client = TestClient(api_main.app)
+
+    client.post(
+        "/edge/projects/integration-full/snapshot",
+        headers={"X-AgentAI-Token": "secret-token"},
+        json={
+            "machine_id": "stockton-frontdesk-01",
+            "machine_name": "Stockton Frontdesk",
+            "source_type": "integration-full",
+            "app_version": "v2.2",
+            "snapshot": {"generated_at": "2026-04-07T10:00:00+00:00", "summary": {}, "latest_downloads": [], "latest_qb_sync": [], "latest_qb_attempts": [], "ai_suggestions": [], "world_clocks": []},
+        },
+    )
+    client.post(
+        "/projects/integration-full/commands",
+        json={
+            "machine_id": "stockton-frontdesk-01",
+            "machine_name": "Stockton Frontdesk",
+            "command_type": "download_missing_reports",
+            "title": "Queue me",
+            "payload": {"store": "Stockton"},
+        },
+    )
+
+    paused = client.post(
+        "/projects/integration-full/machines/stockton-frontdesk-01/control",
+        json={"paused": True, "pause_reason": "Maintenance window"},
+    )
+    assert paused.status_code == 200
+    assert paused.json()["machine"]["paused"] is True
+
+    dispatched = client.get(
+        "/edge/projects/integration-full/commands/stockton-frontdesk-01",
+        headers={"X-AgentAI-Token": "secret-token"},
+    )
+    assert dispatched.status_code == 200
+    assert dispatched.json()["command"] is None
+
+    drained = client.post(
+        "/projects/integration-full/machines/stockton-frontdesk-01/control",
+        json={"paused": False, "draining": True, "cancel_pending": True},
+    )
+    assert drained.status_code == 200
+    assert drained.json()["machine"]["draining"] is True
+    assert drained.json()["cancelled_pending"] == 1
+
+    machines = client.get("/projects/integration-full/machines")
+    assert machines.status_code == 200
+    assert machines.json()[0]["draining"] is True

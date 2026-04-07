@@ -134,6 +134,13 @@ class EdgeCommandLeaseUpdate(BaseModel):
     heartbeat_seconds: int = 120
 
 
+class EdgeMachineControlUpdate(BaseModel):
+    paused: bool | None = None
+    draining: bool | None = None
+    pause_reason: str | None = None
+    cancel_pending: bool = False
+
+
 # ── Dashboard ─────────────────────────────────────────────────────────
 
 @app.get("/")
@@ -541,17 +548,35 @@ def _require_edge_token(x_agentai_token: str | None) -> None:
 
 
 def _project_snapshot_nodes(project_id: str) -> list[dict]:
-    snapshots = db.list_project_snapshots(project_id)
+    machines = db.list_edge_machines(project_id)
+    snapshots = {item.get("machine_id"): item for item in db.list_project_snapshots(project_id)}
+    now = datetime.now(timezone.utc)
     nodes = []
-    for item in snapshots:
+    for machine in machines:
+        snapshot = snapshots.get(machine.get("machine_id"), {})
+        last_seen_raw = machine.get("last_seen_at") or snapshot.get("received_at")
+        last_seen_dt = None
+        if last_seen_raw:
+            try:
+                last_seen_dt = datetime.fromisoformat(last_seen_raw.replace("Z", "+00:00"))
+            except ValueError:
+                last_seen_dt = None
+        is_online = bool(last_seen_dt and (now - last_seen_dt).total_seconds() <= 180)
         nodes.append(
             {
-                "machine_id": item.get("machine_id"),
-                "machine_name": item.get("machine_name"),
-                "source_type": item.get("source_type"),
-                "app_version": item.get("app_version"),
-                "received_at": item.get("received_at"),
-                "summary": item.get("summary") or {},
+                "machine_id": machine.get("machine_id"),
+                "machine_name": machine.get("machine_name"),
+                "source_type": machine.get("source_type") or snapshot.get("source_type"),
+                "app_version": machine.get("app_version") or snapshot.get("app_version"),
+                "received_at": snapshot.get("received_at"),
+                "last_seen_at": last_seen_raw,
+                "online": is_online,
+                "paused": bool(machine.get("paused")),
+                "draining": bool(machine.get("draining")),
+                "pause_reason": machine.get("pause_reason") or "",
+                "last_snapshot_at": machine.get("last_snapshot_at"),
+                "last_command_at": machine.get("last_command_at"),
+                "summary": snapshot.get("summary") or {},
             }
         )
     return nodes
@@ -707,6 +732,28 @@ def create_project_command(project_id: str, body: ProjectCommandCreate):
 @app.get("/projects/{project_id}/commands")
 def list_project_commands(project_id: str, machine_id: str | None = None, limit: int = 20):
     return db.list_edge_commands(project_id=project_id, machine_id=machine_id, limit=limit)
+
+
+@app.get("/projects/{project_id}/machines")
+def list_project_machines(project_id: str):
+    return _project_snapshot_nodes(project_id)
+
+
+@app.post("/projects/{project_id}/machines/{machine_id}/control")
+def update_project_machine_control(project_id: str, machine_id: str, body: EdgeMachineControlUpdate):
+    machine = db.set_edge_machine_control(
+        project_id=project_id,
+        machine_id=machine_id,
+        paused=body.paused,
+        draining=body.draining,
+        pause_reason=body.pause_reason,
+    )
+    if not machine:
+        raise HTTPException(status_code=404, detail="Machine not found.")
+    cancelled = 0
+    if body.cancel_pending:
+        cancelled = db.cancel_pending_edge_commands(project_id=project_id, machine_id=machine_id)
+    return {"machine": machine, "cancelled_pending": cancelled}
 
 
 @app.get("/projects")
