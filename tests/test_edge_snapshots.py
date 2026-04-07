@@ -110,6 +110,22 @@ def test_edge_command_queue_dispatch_and_result(monkeypatch, tmp_path):
     assert command["id"] == command_id
     assert command["status"] == "dispatched"
 
+    acknowledged = client.post(
+        f"/edge/commands/{command_id}/ack",
+        headers={"X-AgentAI-Token": "secret-token"},
+        json={"heartbeat_seconds": 120},
+    )
+    assert acknowledged.status_code == 200
+    assert acknowledged.json()["command"]["status"] == "running"
+
+    heartbeat = client.post(
+        f"/edge/commands/{command_id}/heartbeat",
+        headers={"X-AgentAI-Token": "secret-token"},
+        json={"heartbeat_seconds": 120},
+    )
+    assert heartbeat.status_code == 200
+    assert heartbeat.json()["command"]["last_heartbeat_at"] is not None
+
     completed = client.post(
         f"/edge/commands/{command_id}/result",
         headers={"X-AgentAI-Token": "secret-token"},
@@ -121,3 +137,42 @@ def test_edge_command_queue_dispatch_and_result(monkeypatch, tmp_path):
     commands = client.get("/projects/integration-full/commands")
     assert commands.status_code == 200
     assert commands.json()[0]["result"]["success"] == 4
+
+
+def test_edge_command_retries_then_fails_after_lease_expiry(tmp_path):
+    db = ControlPlaneDB(db_path=str(tmp_path / "control-plane.db"))
+    created = db.create_edge_command(
+        project_id="integration-full",
+        machine_id="stockton-frontdesk-01",
+        machine_name="Stockton Frontdesk",
+        command_type="download_missing_reports",
+        payload={"store": "Stockton"},
+        max_attempts=2,
+    )
+
+    first = db.dispatch_next_edge_command(project_id="integration-full", machine_id="stockton-frontdesk-01", lease_seconds=1)
+    assert first is not None
+    db.acknowledge_edge_command(command_id=created["id"], heartbeat_seconds=1)
+
+    with db._conn() as conn:
+        conn.execute(
+            "UPDATE cp_edge_commands SET lease_expires_at = ? WHERE id = ?",
+            ("2000-01-01T00:00:00+00:00", created["id"]),
+        )
+        conn.commit()
+
+    second = db.dispatch_next_edge_command(project_id="integration-full", machine_id="stockton-frontdesk-01", lease_seconds=1)
+    assert second is not None
+    assert second["attempt_count"] == 2
+
+    with db._conn() as conn:
+        conn.execute(
+            "UPDATE cp_edge_commands SET status = 'running', lease_expires_at = ? WHERE id = ?",
+            ("2000-01-01T00:00:00+00:00", created["id"]),
+        )
+        conn.commit()
+
+    none_left = db.dispatch_next_edge_command(project_id="integration-full", machine_id="stockton-frontdesk-01", lease_seconds=1)
+    assert none_left is None
+    latest = db.list_edge_commands(project_id="integration-full", machine_id="stockton-frontdesk-01", limit=1)[0]
+    assert latest["status"] == "failed"

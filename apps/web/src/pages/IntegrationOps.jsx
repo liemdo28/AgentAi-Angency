@@ -339,6 +339,10 @@ export default function IntegrationOps() {
                     <div className="project-feed-sub">
                       {command.machine_name || command.machine_id} · {formatDateTime(command.created_at)}
                     </div>
+                    <div className="project-feed-sub">
+                      Attempts: {command.attempt_count ?? 0}/{command.max_attempts ?? 0}
+                      {command.lease_expires_at ? ` · Lease: ${formatDateTime(command.lease_expires_at)}` : ''}
+                    </div>
                     {command.error_message && <div className="project-feed-sub">{command.error_message}</div>}
                   </div>
                   <span className={`badge ${command.status === 'success' ? 'success' : command.status === 'failed' ? 'failed' : 'pending'}`}>

@@ -121,12 +121,17 @@ class ProjectCommandCreate(BaseModel):
     created_by: str = "agentai-ui"
     source_suggestion_id: str = ""
     payload: dict | None = None
+    max_attempts: int = 3
 
 
 class EdgeCommandResolve(BaseModel):
     status: str
     result: dict | None = None
     error_message: str = ""
+
+
+class EdgeCommandLeaseUpdate(BaseModel):
+    heartbeat_seconds: int = 120
 
 
 # ── Dashboard ─────────────────────────────────────────────────────────
@@ -635,6 +640,32 @@ def dispatch_edge_project_command(
     return {"command": command}
 
 
+@app.post("/edge/commands/{command_id}/ack")
+def acknowledge_edge_project_command(
+    command_id: str,
+    body: EdgeCommandLeaseUpdate,
+    x_agentai_token: str | None = Header(default=None),
+):
+    _require_edge_token(x_agentai_token)
+    command = db.acknowledge_edge_command(command_id=command_id, heartbeat_seconds=body.heartbeat_seconds)
+    if not command:
+        raise HTTPException(status_code=404, detail="Command not found.")
+    return {"status": "ok", "command": command}
+
+
+@app.post("/edge/commands/{command_id}/heartbeat")
+def heartbeat_edge_project_command(
+    command_id: str,
+    body: EdgeCommandLeaseUpdate,
+    x_agentai_token: str | None = Header(default=None),
+):
+    _require_edge_token(x_agentai_token)
+    command = db.heartbeat_edge_command(command_id=command_id, heartbeat_seconds=body.heartbeat_seconds)
+    if not command:
+        raise HTTPException(status_code=404, detail="Command not found.")
+    return {"status": "ok", "command": command}
+
+
 @app.post("/edge/commands/{command_id}/result")
 def resolve_edge_project_command(
     command_id: str,
@@ -668,6 +699,7 @@ def create_project_command(project_id: str, body: ProjectCommandCreate):
         title=body.title,
         created_by=body.created_by,
         source_suggestion_id=body.source_suggestion_id,
+        max_attempts=body.max_attempts,
     )
     return command
 

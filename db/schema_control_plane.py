@@ -113,9 +113,14 @@ CREATE TABLE IF NOT EXISTS cp_edge_commands (
     status TEXT NOT NULL DEFAULT 'pending',
     result_json TEXT DEFAULT '{}',
     error_message TEXT DEFAULT '',
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     dispatched_at TEXT,
+    acknowledged_at TEXT,
+    last_heartbeat_at TEXT,
+    lease_expires_at TEXT,
     completed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_cp_edge_commands_machine_status

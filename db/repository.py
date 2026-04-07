@@ -43,10 +43,47 @@ class ControlPlaneDB:
         conn = self._conn()
         try:
             conn.executescript(CONTROL_PLANE_SCHEMA)
+            self._ensure_edge_command_columns(conn)
             conn.commit()
             logger.info("Control plane schema ready (%s)", self.db_path)
         finally:
             conn.close()
+
+    def _decode_json(self, value: str | None) -> dict:
+        try:
+            return json.loads(value or "{}")
+        except json.JSONDecodeError:
+            return {}
+
+    def _hydrate_edge_command(self, row: sqlite3.Row | None) -> Optional[dict]:
+        if not row:
+            return None
+        item = dict(row)
+        item["payload"] = self._decode_json(item.get("payload_json"))
+        item["result"] = self._decode_json(item.get("result_json"))
+        return item
+
+    def _ensure_edge_command_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(cp_edge_commands)").fetchall()
+        }
+        required = {
+            "attempt_count": "ALTER TABLE cp_edge_commands ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0",
+            "max_attempts": "ALTER TABLE cp_edge_commands ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 3",
+            "acknowledged_at": "ALTER TABLE cp_edge_commands ADD COLUMN acknowledged_at TEXT",
+            "last_heartbeat_at": "ALTER TABLE cp_edge_commands ADD COLUMN last_heartbeat_at TEXT",
+            "lease_expires_at": "ALTER TABLE cp_edge_commands ADD COLUMN lease_expires_at TEXT",
+        }
+        for column, statement in required.items():
+            if column not in existing:
+                conn.execute(statement)
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_cp_edge_commands_project_lease
+                ON cp_edge_commands(project_id, machine_id, lease_expires_at)
+            """
+        )
 
     # ── goals ─────────────────────────────────────────────────────────
 
@@ -405,6 +442,7 @@ class ControlPlaneDB:
         title: str = "",
         created_by: str = "",
         source_suggestion_id: str = "",
+        max_attempts: int = 3,
     ) -> dict:
         now = datetime.now(timezone.utc).isoformat()
         command_id = str(uuid4())
@@ -425,9 +463,11 @@ class ControlPlaneDB:
                     status,
                     result_json,
                     error_message,
+                    attempt_count,
+                    max_attempts,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '{}', '', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '{}', '', 0, ?, ?, ?)
                 """,
                 (
                     command_id,
@@ -439,6 +479,7 @@ class ControlPlaneDB:
                     created_by,
                     source_suggestion_id,
                     json.dumps(payload or {}, ensure_ascii=False),
+                    max_attempts,
                     now,
                     now,
                 ),
@@ -452,6 +493,8 @@ class ControlPlaneDB:
                 "command_type": command_type,
                 "status": "pending",
                 "title": title,
+                "attempt_count": 0,
+                "max_attempts": max_attempts,
                 "created_at": now,
             }
         finally:
@@ -488,35 +531,73 @@ class ControlPlaneDB:
                     """,
                     (project_id, limit),
                 ).fetchall()
-            results = []
-            for row in rows:
-                item = dict(row)
-                try:
-                    item["payload"] = json.loads(item.get("payload_json") or "{}")
-                except json.JSONDecodeError:
-                    item["payload"] = {}
-                try:
-                    item["result"] = json.loads(item.get("result_json") or "{}")
-                except json.JSONDecodeError:
-                    item["result"] = {}
-                results.append(item)
-            return results
+            return [item for item in (self._hydrate_edge_command(row) for row in rows) if item]
         finally:
             conn.close()
 
-    def dispatch_next_edge_command(self, *, project_id: str, machine_id: str) -> Optional[dict]:
+    def _expire_stale_edge_commands(self, conn: sqlite3.Connection, *, project_id: str, machine_id: str, now: str) -> None:
+        conn.execute(
+            """
+            UPDATE cp_edge_commands
+            SET
+                status = CASE
+                    WHEN attempt_count >= max_attempts THEN 'failed'
+                    ELSE 'pending'
+                END,
+                error_message = CASE
+                    WHEN attempt_count >= max_attempts THEN 'Lease expired and retry budget exhausted.'
+                    ELSE 'Lease expired; command re-queued.'
+                END,
+                lease_expires_at = NULL,
+                last_heartbeat_at = NULL,
+                updated_at = ?,
+                completed_at = CASE
+                    WHEN attempt_count >= max_attempts THEN ?
+                    ELSE completed_at
+                END
+            WHERE project_id = ?
+              AND machine_id = ?
+              AND status IN ('dispatched', 'running')
+              AND lease_expires_at IS NOT NULL
+              AND lease_expires_at < ?
+            """,
+            (now, now, project_id, machine_id, now),
+        )
+
+    def dispatch_next_edge_command(
+        self,
+        *,
+        project_id: str,
+        machine_id: str,
+        lease_seconds: int = 120,
+        dispatch_grace_seconds: int = 30,
+    ) -> Optional[dict]:
         now = datetime.now(timezone.utc).isoformat()
+        now_dt = datetime.now(timezone.utc)
+        lease_expires_at = (now_dt.timestamp() + lease_seconds)
+        dispatch_grace_cutoff = datetime.fromtimestamp(
+            now_dt.timestamp() - dispatch_grace_seconds,
+            tz=timezone.utc,
+        ).isoformat()
         conn = self._conn()
         try:
+            self._expire_stale_edge_commands(conn, project_id=project_id, machine_id=machine_id, now=now)
+            conn.commit()
             row = conn.execute(
                 """
                 SELECT *
                 FROM cp_edge_commands
-                WHERE project_id = ? AND machine_id = ? AND status = 'pending'
-                ORDER BY created_at ASC
+                WHERE project_id = ?
+                  AND machine_id = ?
+                  AND (
+                    status = 'pending'
+                    OR (status = 'dispatched' AND (lease_expires_at IS NULL OR lease_expires_at < ? OR dispatched_at < ?))
+                  )
+                  AND attempt_count < max_attempts
+                ORDER BY created_at ASC, updated_at ASC
                 LIMIT 1
                 """,
-                (project_id, machine_id),
+                (project_id, machine_id, now, dispatch_grace_cutoff),
             ).fetchone()
             if not row:
                 return None
@@ -524,22 +605,63 @@ class ControlPlaneDB:
             conn.execute(
                 """
                 UPDATE cp_edge_commands
-                SET status = 'dispatched', dispatched_at = ?, updated_at = ?
+                SET
+                    status = 'dispatched',
+                    dispatched_at = ?,
+                    updated_at = ?,
+                    lease_expires_at = ?,
+                    attempt_count = attempt_count + 1
                 WHERE id = ?
                 """,
-                (now, now, command_id),
+                (now, now, datetime.fromtimestamp(lease_expires_at, tz=timezone.utc).isoformat(), command_id),
             )
             conn.commit()
-            item = dict(row)
-            item["status"] = "dispatched"
-            item["dispatched_at"] = now
-            item["updated_at"] = now
-            try:
-                item["payload"] = json.loads(item.get("payload_json") or "{}")
-            except json.JSONDecodeError:
-                item["payload"] = {}
-            item["result"] = {}
-            return item
+            refreshed = conn.execute("SELECT * FROM cp_edge_commands WHERE id = ?", (command_id,)).fetchone()
+            return self._hydrate_edge_command(refreshed)
+        finally:
+            conn.close()
+
+    def acknowledge_edge_command(self, *, command_id: str, heartbeat_seconds: int = 120) -> Optional[dict]:
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat()
+        lease_expires_at = datetime.fromtimestamp(now_dt.timestamp() + heartbeat_seconds, tz=timezone.utc).isoformat()
+        conn = self._conn()
+        try:
+            conn.execute(
+                """
+                UPDATE cp_edge_commands
+                SET status = 'running',
+                    acknowledged_at = COALESCE(acknowledged_at, ?),
+                    last_heartbeat_at = ?,
+                    lease_expires_at = ?,
+                    updated_at = ?
+                WHERE id = ? AND status IN ('dispatched', 'running')
+                """,
+                (now, now, lease_expires_at, now, command_id),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM cp_edge_commands WHERE id = ?", (command_id,)).fetchone()
+            return self._hydrate_edge_command(row)
+        finally:
+            conn.close()
+
+    def heartbeat_edge_command(self, *, command_id: str, heartbeat_seconds: int = 120) -> Optional[dict]:
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat()
+        lease_expires_at = datetime.fromtimestamp(now_dt.timestamp() + heartbeat_seconds, tz=timezone.utc).isoformat()
+        conn = self._conn()
+        try:
+            conn.execute(
+                """
+                UPDATE cp_edge_commands
+                SET last_heartbeat_at = ?, lease_expires_at = ?, updated_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (now, lease_expires_at, now, command_id),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM cp_edge_commands WHERE id = ?", (command_id,)).fetchone()
+            return self._hydrate_edge_command(row)
         finally:
             conn.close()
 
@@ -557,7 +679,8 @@ class ControlPlaneDB:
             conn.execute(
                 """
                 UPDATE cp_edge_commands
-                SET status = ?, result_json = ?, error_message = ?, completed_at = ?, updated_at = ?
+                SET status = ?, result_json = ?, error_message = ?, completed_at = ?, updated_at = ?,
+                    lease_expires_at = NULL, last_heartbeat_at = NULL
                 WHERE id = ?
                 """,
                 (
@@ -571,18 +694,7 @@ class ControlPlaneDB:
             )
             conn.commit()
             row = conn.execute("SELECT * FROM cp_edge_commands WHERE id = ?", (command_id,)).fetchone()
-            if not row:
-                return None
-            item = dict(row)
-            try:
-                item["payload"] = json.loads(item.get("payload_json") or "{}")
-            except json.JSONDecodeError:
-                item["payload"] = {}
-            try:
-                item["result"] = json.loads(item.get("result_json") or "{}")
-            except json.JSONDecodeError:
-                item["result"] = {}
-            return item
+            return self._hydrate_edge_command(row)
         finally:
             conn.close()
 
