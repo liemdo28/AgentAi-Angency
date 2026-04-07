@@ -169,6 +169,7 @@ export default function IntegrationOps() {
   const summary = ops.summary || {};
   const clocks = ops.world_clocks || [];
   const latestDownloads = ops.latest_downloads || [];
+  const missingDownloadRecords = ops.missing_download_records || [];
   const latestQbSync = ops.latest_qb_sync || [];
   const latestAttempts = ops.latest_qb_attempts || [];
   const suggestions = ops.ai_suggestions || [];
@@ -212,6 +213,10 @@ export default function IntegrationOps() {
           <div className="stat-label">Last Download</div>
           <div className="stat-value blue">{formatDate(summary.last_download_at)}</div>
           <div className="stat-sub">{formatDateTime(summary.last_download_at)}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Missing Report Days</div>
+          <div className="stat-value red">{summary.missing_download_record_count ?? 0}</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Last QB Sync</div>
@@ -258,6 +263,22 @@ export default function IntegrationOps() {
                     <div className="project-feed-sub">{item.business_date || 'Unknown date'} · {formatDateTime(item.saved_at)}</div>
                   </div>
                   <span className="badge success">downloaded</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="integration-panel">
+            <div className="section-title">Missing Download Records</div>
+            <div className="project-feed">
+              {missingDownloadRecords.length === 0 && <div className="project-feed-empty">No missing download dates recorded.</div>}
+              {missingDownloadRecords.map((item) => (
+                <div key={`${item.store}-${item.report_key}-${item.business_date}`} className="project-feed-row">
+                  <div>
+                    <div className="project-feed-title">{item.store} · {item.report_label}</div>
+                    <div className="project-feed-sub">{item.business_date} · {item.reason}</div>
+                  </div>
+                  <span className="badge failed">missing</span>
                 </div>
               ))}
             </div>
