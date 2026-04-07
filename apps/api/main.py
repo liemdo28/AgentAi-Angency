@@ -113,6 +113,22 @@ class EdgeProjectSnapshotUpsert(BaseModel):
     snapshot: dict
 
 
+class ProjectCommandCreate(BaseModel):
+    machine_id: str
+    machine_name: str
+    command_type: str
+    title: str = ""
+    created_by: str = "agentai-ui"
+    source_suggestion_id: str = ""
+    payload: dict | None = None
+
+
+class EdgeCommandResolve(BaseModel):
+    status: str
+    result: dict | None = None
+    error_message: str = ""
+
+
 # ── Dashboard ─────────────────────────────────────────────────────────
 
 @app.get("/")
@@ -548,6 +564,7 @@ def _resolve_integration_snapshot(project_path: Path) -> dict | None:
         snapshot["source_app_version"] = remote.get("app_version") or ""
         snapshot["source_received_at"] = remote.get("received_at")
         snapshot["remote_nodes"] = _project_snapshot_nodes("integration-full")
+        snapshot["recent_commands"] = db.list_edge_commands(project_id="integration-full", limit=8)
         return snapshot
 
     local_snapshot = _load_integration_snapshot(project_path)
@@ -561,6 +578,7 @@ def _resolve_integration_snapshot(project_path: Path) -> dict | None:
         local_snapshot["source_app_version"] = ""
         local_snapshot["source_received_at"] = local_snapshot.get("generated_at")
         local_snapshot["remote_nodes"] = []
+        local_snapshot["recent_commands"] = db.list_edge_commands(project_id="integration-full", limit=8)
     return local_snapshot
 
 
@@ -604,6 +622,59 @@ def list_edge_project_snapshots(
         }
         for item in snapshots
     ]
+
+
+@app.get("/edge/projects/{project_id}/commands/{machine_id}")
+def dispatch_edge_project_command(
+    project_id: str,
+    machine_id: str,
+    x_agentai_token: str | None = Header(default=None),
+):
+    _require_edge_token(x_agentai_token)
+    command = db.dispatch_next_edge_command(project_id=project_id, machine_id=machine_id)
+    return {"command": command}
+
+
+@app.post("/edge/commands/{command_id}/result")
+def resolve_edge_project_command(
+    command_id: str,
+    body: EdgeCommandResolve,
+    x_agentai_token: str | None = Header(default=None),
+):
+    _require_edge_token(x_agentai_token)
+    if body.status not in {"success", "failed", "cancelled"}:
+        raise HTTPException(status_code=400, detail="Unsupported command status.")
+    command = db.complete_edge_command(
+        command_id=command_id,
+        status=body.status,
+        result=body.result,
+        error_message=body.error_message,
+    )
+    if not command:
+        raise HTTPException(status_code=404, detail="Command not found.")
+    return {"status": "ok", "command": command}
+
+
+@app.post("/projects/{project_id}/commands")
+def create_project_command(project_id: str, body: ProjectCommandCreate):
+    if project_id != "integration-full":
+        raise HTTPException(status_code=400, detail="Project command queue is only enabled for integration-full right now.")
+    command = db.create_edge_command(
+        project_id=project_id,
+        machine_id=body.machine_id,
+        machine_name=body.machine_name,
+        command_type=body.command_type,
+        payload=body.payload,
+        title=body.title,
+        created_by=body.created_by,
+        source_suggestion_id=body.source_suggestion_id,
+    )
+    return command
+
+
+@app.get("/projects/{project_id}/commands")
+def list_project_commands(project_id: str, machine_id: str | None = None, limit: int = 20):
+    return db.list_edge_commands(project_id=project_id, machine_id=machine_id, limit=limit)
 
 
 @app.get("/projects")

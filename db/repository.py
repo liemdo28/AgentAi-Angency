@@ -394,6 +394,198 @@ class ControlPlaneDB:
         snapshots = self.list_project_snapshots(project_id)
         return snapshots[0] if snapshots else None
 
+    def create_edge_command(
+        self,
+        *,
+        project_id: str,
+        machine_id: str,
+        machine_name: str,
+        command_type: str,
+        payload: dict | None = None,
+        title: str = "",
+        created_by: str = "",
+        source_suggestion_id: str = "",
+    ) -> dict:
+        now = datetime.now(timezone.utc).isoformat()
+        command_id = str(uuid4())
+        conn = self._conn()
+        try:
+            conn.execute(
+                """
+                INSERT INTO cp_edge_commands (
+                    id,
+                    project_id,
+                    machine_id,
+                    machine_name,
+                    command_type,
+                    title,
+                    created_by,
+                    source_suggestion_id,
+                    payload_json,
+                    status,
+                    result_json,
+                    error_message,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '{}', '', ?, ?)
+                """,
+                (
+                    command_id,
+                    project_id,
+                    machine_id,
+                    machine_name,
+                    command_type,
+                    title,
+                    created_by,
+                    source_suggestion_id,
+                    json.dumps(payload or {}, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+            return {
+                "id": command_id,
+                "project_id": project_id,
+                "machine_id": machine_id,
+                "machine_name": machine_name,
+                "command_type": command_type,
+                "status": "pending",
+                "title": title,
+                "created_at": now,
+            }
+        finally:
+            conn.close()
+
+    def list_edge_commands(
+        self,
+        *,
+        project_id: str,
+        machine_id: str | None = None,
+        limit: int = 20,
+    ) -> List[dict]:
+        conn = self._conn()
+        try:
+            if machine_id:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM cp_edge_commands
+                    WHERE project_id = ? AND machine_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (project_id, machine_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM cp_edge_commands
+                    WHERE project_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (project_id, limit),
+                ).fetchall()
+            results = []
+            for row in rows:
+                item = dict(row)
+                try:
+                    item["payload"] = json.loads(item.get("payload_json") or "{}")
+                except json.JSONDecodeError:
+                    item["payload"] = {}
+                try:
+                    item["result"] = json.loads(item.get("result_json") or "{}")
+                except json.JSONDecodeError:
+                    item["result"] = {}
+                results.append(item)
+            return results
+        finally:
+            conn.close()
+
+    def dispatch_next_edge_command(self, *, project_id: str, machine_id: str) -> Optional[dict]:
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM cp_edge_commands
+                WHERE project_id = ? AND machine_id = ? AND status = 'pending'
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (project_id, machine_id),
+            ).fetchone()
+            if not row:
+                return None
+            command_id = row["id"]
+            conn.execute(
+                """
+                UPDATE cp_edge_commands
+                SET status = 'dispatched', dispatched_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (now, now, command_id),
+            )
+            conn.commit()
+            item = dict(row)
+            item["status"] = "dispatched"
+            item["dispatched_at"] = now
+            item["updated_at"] = now
+            try:
+                item["payload"] = json.loads(item.get("payload_json") or "{}")
+            except json.JSONDecodeError:
+                item["payload"] = {}
+            item["result"] = {}
+            return item
+        finally:
+            conn.close()
+
+    def complete_edge_command(
+        self,
+        *,
+        command_id: str,
+        status: str,
+        result: dict | None = None,
+        error_message: str = "",
+    ) -> Optional[dict]:
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._conn()
+        try:
+            conn.execute(
+                """
+                UPDATE cp_edge_commands
+                SET status = ?, result_json = ?, error_message = ?, completed_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    json.dumps(result or {}, ensure_ascii=False),
+                    error_message,
+                    now,
+                    now,
+                    command_id,
+                ),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM cp_edge_commands WHERE id = ?", (command_id,)).fetchone()
+            if not row:
+                return None
+            item = dict(row)
+            try:
+                item["payload"] = json.loads(item.get("payload_json") or "{}")
+            except json.JSONDecodeError:
+                item["payload"] = {}
+            try:
+                item["result"] = json.loads(item.get("result_json") or "{}")
+            except json.JSONDecodeError:
+                item["result"] = {}
+            return item
+        finally:
+            conn.close()
+
     # ── metrics / stats ───────────────────────────────────────────────
 
     def get_dashboard_stats(self) -> dict:

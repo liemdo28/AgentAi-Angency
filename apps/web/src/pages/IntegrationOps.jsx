@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { executeSmartIssue, listProjects } from '../api';
+import { createProjectCommand, executeSmartIssue, listProjects } from '../api';
 
 function formatDate(value) {
   if (!value) return '-';
@@ -20,6 +20,7 @@ export default function IntegrationOps() {
   const [project, setProject] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busySuggestionId, setBusySuggestionId] = useState('');
+  const [busyCommandId, setBusyCommandId] = useState('');
 
   const load = async () => {
     setLoading(true);
@@ -50,6 +51,65 @@ export default function IntegrationOps() {
     }
   };
 
+  const buildCommandRequest = (suggestion, machineId, machineName) => {
+    if (!suggestion || !machineId) return null;
+    if (suggestion.kind === 'download_gap' || suggestion.kind === 'download_retry') {
+      return {
+        machine_id: machineId,
+        machine_name: machineName || 'Integration machine',
+        command_type: 'download_missing_reports',
+        title: suggestion.title,
+        source_suggestion_id: suggestion.id,
+        payload: {
+          store: suggestion.store,
+          start_date: suggestion.start_date,
+          end_date: suggestion.end_date,
+          report_types: suggestion.report_types || [],
+          upload_to_gdrive: true,
+        },
+      };
+    }
+    if (suggestion.kind === 'qb_gap' || suggestion.kind === 'qb_failed') {
+      return {
+        machine_id: machineId,
+        machine_name: machineName || 'Integration machine',
+        command_type: 'catch_up_qb_sync',
+        title: suggestion.title,
+        source_suggestion_id: suggestion.id,
+        payload: {
+          store: suggestion.store,
+          start_date: suggestion.start_date,
+          end_date: suggestion.end_date,
+          source: 'gdrive',
+          source_filter: suggestion.source_filter || 'toast',
+          preview: false,
+          strict_mode: true,
+        },
+      };
+    }
+    return null;
+  };
+
+  const handleQueueCommand = async (suggestion) => {
+    const machineId = ops.source_machine_id;
+    const machineName = ops.source_machine_name;
+    const payload = buildCommandRequest(suggestion, machineId, machineName);
+    if (!payload) {
+      window.alert('This suggestion cannot be converted into a machine command yet.');
+      return;
+    }
+    setBusyCommandId(suggestion.id);
+    try {
+      await createProjectCommand('integration-full', payload);
+      window.alert(`Queued command for ${machineName || machineId}`);
+      await load();
+    } catch (error) {
+      window.alert(`Could not queue command: ${error.message}`);
+    } finally {
+      setBusyCommandId('');
+    }
+  };
+
   if (loading && !project) {
     return <div className="page"><div className="empty-state">Loading integration operations…</div></div>;
   }
@@ -66,6 +126,7 @@ export default function IntegrationOps() {
   const latestAttempts = ops.latest_qb_attempts || [];
   const suggestions = ops.ai_suggestions || [];
   const remoteNodes = ops.remote_nodes || [];
+  const recentCommands = ops.recent_commands || [];
 
   return (
     <div className="page">
@@ -174,6 +235,14 @@ export default function IntegrationOps() {
                   >
                     {busySuggestionId === suggestion.id ? 'Creating...' : suggestion.action_label}
                   </button>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => handleQueueCommand(suggestion)}
+                    disabled={!ops.source_machine_id || busyCommandId === suggestion.id}
+                    style={{ marginTop: 8 }}
+                  >
+                    {busyCommandId === suggestion.id ? 'Queueing...' : `Send to ${ops.source_machine_name || 'machine'}`}
+                  </button>
                 </div>
               ))}
             </div>
@@ -252,6 +321,29 @@ export default function IntegrationOps() {
                     </div>
                   </div>
                   <span className="badge success">{node.machine_id || 'node'}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="integration-panel">
+            <div className="section-title">Command Queue</div>
+            <div className="project-feed">
+              {recentCommands.length === 0 && (
+                <div className="project-feed-empty">No queued commands yet.</div>
+              )}
+              {recentCommands.map((command) => (
+                <div key={command.id} className="project-feed-row">
+                  <div>
+                    <div className="project-feed-title">{command.title || command.command_type}</div>
+                    <div className="project-feed-sub">
+                      {command.machine_name || command.machine_id} · {formatDateTime(command.created_at)}
+                    </div>
+                    {command.error_message && <div className="project-feed-sub">{command.error_message}</div>}
+                  </div>
+                  <span className={`badge ${command.status === 'success' ? 'success' : command.status === 'failed' ? 'failed' : 'pending'}`}>
+                    {command.status}
+                  </span>
                 </div>
               ))}
             </div>

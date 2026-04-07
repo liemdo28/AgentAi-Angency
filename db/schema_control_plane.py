@@ -99,6 +99,30 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_cp_project_snapshots_project_machine
 CREATE INDEX IF NOT EXISTS idx_cp_project_snapshots_project_received
     ON cp_project_snapshots(project_id, received_at DESC);
 
+-- EDGE COMMAND QUEUE ---------------------------------------------------------
+CREATE TABLE IF NOT EXISTS cp_edge_commands (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    machine_id TEXT NOT NULL,
+    machine_name TEXT NOT NULL,
+    command_type TEXT NOT NULL,
+    title TEXT DEFAULT '',
+    created_by TEXT DEFAULT '',
+    source_suggestion_id TEXT DEFAULT '',
+    payload_json TEXT DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'pending',
+    result_json TEXT DEFAULT '{}',
+    error_message TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    dispatched_at TEXT,
+    completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_cp_edge_commands_machine_status
+    ON cp_edge_commands(project_id, machine_id, status, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_cp_edge_commands_project_created
+    ON cp_edge_commands(project_id, created_at DESC);
+
 -- METRICS SNAPSHOTS -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS cp_metrics (
     id TEXT PRIMARY KEY,
