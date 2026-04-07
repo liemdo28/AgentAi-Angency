@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { listProjects } from '../api';
+import React, { useEffect, useState } from 'react';
+import { executeSmartIssue, listProjects } from '../api';
 
 const TYPE_COLORS = {
   python: '#3572A5',
@@ -24,7 +24,6 @@ function getStatusInfo(project) {
   if (s === 'idle' || s === 'stopped') {
     return { cls: 'status-idle', label: 'Idle' };
   }
-  // offline, warning, missing, error, or anything else
   return { cls: 'status-offline', label: 'Offline' };
 }
 
@@ -33,21 +32,47 @@ function truncatePath(p, maxLen = 40) {
   return '...' + p.slice(-(maxLen - 3));
 }
 
+function formatDate(value) {
+  if (!value) return '-';
+  return value.slice(0, 10);
+}
+
+function formatTime(value) {
+  if (!value) return '-';
+  return value.replace('T', ' ').replace('Z', ' UTC').slice(0, 19);
+}
+
 export default function Projects() {
   const [projects, setProjects] = useState([]);
   const [filter, setFilter] = useState('');
+  const [busySuggestionId, setBusySuggestionId] = useState('');
+
+  const load = () => listProjects().then(setProjects).catch(() => {});
 
   useEffect(() => {
-    listProjects().then(setProjects).catch(() => {});
+    load();
   }, []);
 
-  const categories = [...new Set(projects.map(p => p.category))];
-  const filtered = filter ? projects.filter(p => p.category === filter) : projects;
+  const categories = [...new Set(projects.map((p) => p.category))];
+  const filtered = filter ? projects.filter((p) => p.category === filter) : projects;
 
-  const countByStatus = (label) => projects.filter(p => getStatusInfo(p).label === label).length;
+  const countByStatus = (label) => projects.filter((p) => getStatusInfo(p).label === label).length;
   const runningCount = countByStatus('Running');
   const idleCount = countByStatus('Idle');
   const offlineCount = countByStatus('Offline');
+
+  const handleSuggestion = async (suggestion) => {
+    if (!suggestion?.prompt) return;
+    setBusySuggestionId(suggestion.id);
+    try {
+      await executeSmartIssue(suggestion.prompt);
+      window.alert(`Created workflow tasks for: ${suggestion.title}`);
+    } catch (error) {
+      window.alert(`Could not create workflow tasks: ${error.message}`);
+    } finally {
+      setBusySuggestionId('');
+    }
+  };
 
   return (
     <div className="page">
@@ -59,8 +84,10 @@ export default function Projects() {
           </span>
         </div>
         <div className="tab-bar">
-          <button className={`tab-btn ${filter === '' ? 'active' : ''}`} onClick={() => setFilter('')}>All</button>
-          {categories.map(c => (
+          <button className={`tab-btn ${filter === '' ? 'active' : ''}`} onClick={() => setFilter('')}>
+            All
+          </button>
+          {categories.map((c) => (
             <button key={c} className={`tab-btn ${filter === c ? 'active' : ''}`} onClick={() => setFilter(c)}>
               {CATEGORY_LABELS[c] || c}
             </button>
@@ -83,16 +110,20 @@ export default function Projects() {
         </div>
         <div className="stat-card">
           <div className="stat-label">Uncommitted</div>
-          <div className="stat-value yellow">{projects.filter(p => p.dirty).length}</div>
+          <div className="stat-value yellow">{projects.filter((p) => p.dirty).length}</div>
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 12 }}>
-        {filtered.map(p => {
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))', gap: 12 }}>
+        {filtered.map((p) => {
           const status = getStatusInfo(p);
+          const ops = p.integration_ops;
+          const latestDownload = ops?.latest_downloads || [];
+          const latestQbSync = ops?.latest_qb_sync || [];
+          const suggestions = ops?.ai_suggestions || [];
+
           return (
-            <div key={p.id} className="org-card" style={{ textAlign: 'left', padding: 18 }}>
-              {/* Header */}
+            <div key={p.id} className="org-card project-card" style={{ textAlign: 'left', padding: 18 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 10 }}>
                 <div>
                   <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 2 }}>{p.name}</div>
@@ -101,28 +132,33 @@ export default function Projects() {
                 <span className={status.cls}>{status.label}</span>
               </div>
 
-              {/* Description */}
               <div className="text-secondary" style={{ fontSize: 12, marginBottom: 12, lineHeight: 1.5 }}>
                 {p.description}
               </div>
 
-              {/* Tech stack */}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 10 }}>
-                {p.tech?.map(t => (
-                  <span key={t} style={{
-                    fontSize: 10, padding: '2px 6px', borderRadius: 3,
-                    background: 'var(--bg-surface2)', color: 'var(--text-secondary)',
-                    border: '1px solid var(--border)',
-                  }}>{t}</span>
+                {p.tech?.map((t) => (
+                  <span
+                    key={t}
+                    style={{
+                      fontSize: 10,
+                      padding: '2px 6px',
+                      borderRadius: 3,
+                      background: 'var(--bg-surface2)',
+                      color: 'var(--text-secondary)',
+                      border: '1px solid var(--border)',
+                    }}
+                  >
+                    {t}
+                  </span>
                 ))}
               </div>
 
-              {/* Git info + path */}
               <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {p.local_path && (
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
                     <span className="text-dim">Path</span>
-                    <span className="mono" title={p.local_path} style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <span className="mono" title={p.local_path} style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {truncatePath(p.local_path)}
                     </span>
                   </div>
@@ -136,7 +172,7 @@ export default function Projects() {
                 {p.last_commit && (
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
                     <span className="text-dim">Latest</span>
-                    <span className="text-secondary" style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <span className="text-secondary" style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {p.last_commit}
                     </span>
                   </div>
@@ -144,7 +180,7 @@ export default function Projects() {
                 {p.last_commit_date && (
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
                     <span className="text-dim">Date</span>
-                    <span className="text-secondary">{p.last_commit_date?.slice(0, 10)}</span>
+                    <span className="text-secondary">{formatDate(p.last_commit_date)}</span>
                   </div>
                 )}
                 {p.dirty && (
@@ -173,12 +209,85 @@ export default function Projects() {
                 )}
               </div>
 
-              {/* Type indicator color bar */}
-              <div style={{
-                position: 'absolute', top: 0, right: 0,
-                width: 4, height: '100%', borderRadius: '0 10px 10px 0',
-                background: TYPE_COLORS[p.type] || 'var(--text-muted)',
-              }} />
+              {ops && (
+                <div className="project-ops">
+                  <div className="project-ops-grid">
+                    <div className="project-mini-stat">
+                      <div className="project-mini-label">Last Download</div>
+                      <div className="project-mini-value">{formatDate(ops.summary?.last_download_at)}</div>
+                    </div>
+                    <div className="project-mini-stat">
+                      <div className="project-mini-label">Last QB Sync</div>
+                      <div className="project-mini-value">{formatDate(ops.summary?.last_qb_sync_at)}</div>
+                    </div>
+                    <div className="project-mini-stat">
+                      <div className="project-mini-label">Download Gaps</div>
+                      <div className="project-mini-value">{ops.summary?.download_gap_count ?? 0}</div>
+                    </div>
+                    <div className="project-mini-stat">
+                      <div className="project-mini-label">QB Gaps</div>
+                      <div className="project-mini-value">{ops.summary?.qb_gap_count ?? 0}</div>
+                    </div>
+                  </div>
+
+                  <div className="project-section-title">Latest Download Activity</div>
+                  <div className="project-feed">
+                    {latestDownload.length === 0 && <div className="project-feed-empty">No successful downloads found yet.</div>}
+                    {latestDownload.map((item) => (
+                      <div key={`${item.store}-${item.report_key}-${item.business_date}`} className="project-feed-row">
+                        <div>
+                          <div className="project-feed-title">{item.store} · {item.report_label}</div>
+                          <div className="project-feed-sub">{item.business_date || 'Unknown date'} · {formatTime(item.saved_at)}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="project-section-title">Latest QB Sync Activity</div>
+                  <div className="project-feed">
+                    {latestQbSync.length === 0 && <div className="project-feed-empty">No successful QB sync runs found yet.</div>}
+                    {latestQbSync.map((item) => (
+                      <div key={`${item.store}-${item.source_name}-${item.date}`} className="project-feed-row">
+                        <div>
+                          <div className="project-feed-title">{item.store} · {item.source_name || 'Unknown'}</div>
+                          <div className="project-feed-sub">{item.date || 'Unknown date'} · {formatTime(item.completed_at)}</div>
+                        </div>
+                        <span className="badge success">{item.status}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="project-section-title">AI Next Actions</div>
+                  <div className="project-suggestion-list">
+                    {suggestions.length === 0 && <div className="project-feed-empty">No suggestions right now.</div>}
+                    {suggestions.map((suggestion) => (
+                      <div key={suggestion.id} className="project-suggestion-card">
+                        <div className="project-feed-title">{suggestion.title}</div>
+                        <div className="project-feed-sub">{suggestion.description}</div>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => handleSuggestion(suggestion)}
+                          disabled={busySuggestionId === suggestion.id}
+                        >
+                          {busySuggestionId === suggestion.id ? 'Creating...' : suggestion.action_label}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  right: 0,
+                  width: 4,
+                  height: '100%',
+                  borderRadius: '0 10px 10px 0',
+                  background: TYPE_COLORS[p.type] || 'var(--text-muted)',
+                }}
+              />
             </div>
           );
         })}

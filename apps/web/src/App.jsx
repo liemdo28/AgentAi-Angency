@@ -87,6 +87,44 @@ const PAGE_TITLES = {
   '/settings': 'Settings',
 };
 
+const WORLD_CLOCKS = [
+  { key: 'vn', label: 'VN', timeZone: 'Asia/Ho_Chi_Minh' },
+  { key: 'san_antonio', label: 'San Antonio', timeZone: 'America/Chicago' },
+  { key: 'stockton', label: 'Stockton', timeZone: 'America/Los_Angeles' },
+];
+
+function WorldClocks() {
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  return (
+    <div className="world-clocks" aria-label="World clocks">
+      {WORLD_CLOCKS.map((clock) => {
+        const value = new Intl.DateTimeFormat('en-US', {
+          timeZone: clock.timeZone,
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+        }).format(now);
+
+        return (
+          <div key={clock.key} className="clock-chip">
+            <span className="clock-label">{clock.label}</span>
+            <span className="clock-value">{value}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function ContentHeader() {
   const location = useLocation();
   const { theme, setTheme } = useTheme();
@@ -100,6 +138,7 @@ function ContentHeader() {
     <div className="content-header">
       <span className="content-header-title">{title}</span>
       <div className="content-header-actions">
+        <WorldClocks />
         <button onClick={toggleTheme} className="btn btn-ghost btn-sm">
           {theme === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19'}
         </button>
