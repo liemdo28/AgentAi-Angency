@@ -21,11 +21,12 @@ import json
 import os
 import subprocess
 import sys
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -102,6 +103,14 @@ class ApprovalResolve(BaseModel):
     status: str  # "approved" or "rejected"
     approved_by: str = ""
     reason: str = ""
+
+
+class EdgeProjectSnapshotUpsert(BaseModel):
+    machine_id: str
+    machine_name: str
+    source_type: str = "integration-full"
+    app_version: str = ""
+    snapshot: dict
 
 
 # ── Dashboard ─────────────────────────────────────────────────────────
@@ -499,6 +508,104 @@ def _load_integration_snapshot(project_path: Path) -> dict | None:
         }
 
 
+def _require_edge_token(x_agentai_token: str | None) -> None:
+    expected = os.environ.get("AGENTAI_EDGE_TOKEN", "").strip()
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="AGENTAI_EDGE_TOKEN is not configured on AgentAI.",
+        )
+    if x_agentai_token != expected:
+        raise HTTPException(status_code=401, detail="Invalid edge token.")
+
+
+def _project_snapshot_nodes(project_id: str) -> list[dict]:
+    snapshots = db.list_project_snapshots(project_id)
+    nodes = []
+    for item in snapshots:
+        nodes.append(
+            {
+                "machine_id": item.get("machine_id"),
+                "machine_name": item.get("machine_name"),
+                "source_type": item.get("source_type"),
+                "app_version": item.get("app_version"),
+                "received_at": item.get("received_at"),
+                "summary": item.get("summary") or {},
+            }
+        )
+    return nodes
+
+
+def _resolve_integration_snapshot(project_path: Path) -> dict | None:
+    remote = db.get_latest_project_snapshot("integration-full")
+    if remote:
+        snapshot = deepcopy(remote.get("snapshot") or {})
+        snapshot["source_mode"] = "remote"
+        snapshot["source_project_id"] = "integration-full"
+        snapshot["source_type"] = remote.get("source_type") or "integration-full"
+        snapshot["source_machine_id"] = remote.get("machine_id")
+        snapshot["source_machine_name"] = remote.get("machine_name")
+        snapshot["source_app_version"] = remote.get("app_version") or ""
+        snapshot["source_received_at"] = remote.get("received_at")
+        snapshot["remote_nodes"] = _project_snapshot_nodes("integration-full")
+        return snapshot
+
+    local_snapshot = _load_integration_snapshot(project_path)
+    if local_snapshot is not None:
+        local_snapshot = deepcopy(local_snapshot)
+        local_snapshot["source_mode"] = "local"
+        local_snapshot["source_project_id"] = "integration-full"
+        local_snapshot["source_type"] = "integration-full"
+        local_snapshot["source_machine_id"] = None
+        local_snapshot["source_machine_name"] = "Local workspace"
+        local_snapshot["source_app_version"] = ""
+        local_snapshot["source_received_at"] = local_snapshot.get("generated_at")
+        local_snapshot["remote_nodes"] = []
+    return local_snapshot
+
+
+@app.post("/edge/projects/{project_id}/snapshot")
+def upsert_edge_project_snapshot(
+    project_id: str,
+    body: EdgeProjectSnapshotUpsert,
+    x_agentai_token: str | None = Header(default=None),
+):
+    _require_edge_token(x_agentai_token)
+    snapshot = body.snapshot or {}
+    if not isinstance(snapshot, dict) or not snapshot:
+        raise HTTPException(status_code=400, detail="Snapshot payload must be a non-empty object.")
+    result = db.upsert_project_snapshot(
+        project_id=project_id,
+        machine_id=body.machine_id,
+        machine_name=body.machine_name,
+        source_type=body.source_type,
+        app_version=body.app_version,
+        snapshot=snapshot,
+    )
+    return {"status": "ok", **result}
+
+
+@app.get("/edge/projects/{project_id}/snapshots")
+def list_edge_project_snapshots(
+    project_id: str,
+    x_agentai_token: str | None = Header(default=None),
+):
+    _require_edge_token(x_agentai_token)
+    snapshots = db.list_project_snapshots(project_id)
+    return [
+        {
+            "project_id": item.get("project_id"),
+            "machine_id": item.get("machine_id"),
+            "machine_name": item.get("machine_name"),
+            "source_type": item.get("source_type"),
+            "app_version": item.get("app_version"),
+            "received_at": item.get("received_at"),
+            "summary": item.get("summary") or {},
+        }
+        for item in snapshots
+    ]
+
+
 @app.get("/projects")
 def list_projects():
     """List all projects from the Master directory with live git info."""
@@ -507,7 +614,7 @@ def list_projects():
         project_path = MASTER_DIR / dir_name
         git = _git_info(project_path)
         status = _detect_status(project_path, meta.get("port"))
-        integration_ops = _load_integration_snapshot(project_path) if dir_name == "integration-full" else None
+        integration_ops = _resolve_integration_snapshot(project_path) if dir_name == "integration-full" else None
 
         projects.append({
             "id": dir_name,
@@ -540,7 +647,7 @@ def get_project(project_id: str):
     project_path = MASTER_DIR / project_id
     git = _git_info(project_path)
     status = _detect_status(project_path, meta.get("port"))
-    integration_ops = _load_integration_snapshot(project_path) if project_id == "integration-full" else None
+    integration_ops = _resolve_integration_snapshot(project_path) if project_id == "integration-full" else None
 
     # Count files
     file_count = 0

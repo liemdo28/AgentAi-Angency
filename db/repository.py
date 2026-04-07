@@ -295,6 +295,105 @@ class ControlPlaneDB:
         finally:
             conn.close()
 
+    # ── edge project snapshots ───────────────────────────────────────
+
+    def upsert_project_snapshot(
+        self,
+        *,
+        project_id: str,
+        machine_id: str,
+        machine_name: str,
+        source_type: str,
+        snapshot: dict,
+        app_version: str = "",
+        received_at: str | None = None,
+    ) -> dict:
+        snapshot_json = json.dumps(snapshot or {}, ensure_ascii=False)
+        summary_json = json.dumps((snapshot or {}).get("summary") or {}, ensure_ascii=False)
+        now = received_at or datetime.now(timezone.utc).isoformat()
+        row_id = str(uuid4())
+        conn = self._conn()
+        try:
+            conn.execute(
+                """
+                INSERT INTO cp_project_snapshots (
+                    id,
+                    project_id,
+                    machine_id,
+                    machine_name,
+                    source_type,
+                    app_version,
+                    snapshot_json,
+                    summary_json,
+                    received_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(project_id, machine_id) DO UPDATE SET
+                    machine_name = excluded.machine_name,
+                    source_type = excluded.source_type,
+                    app_version = excluded.app_version,
+                    snapshot_json = excluded.snapshot_json,
+                    summary_json = excluded.summary_json,
+                    received_at = excluded.received_at,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    row_id,
+                    project_id,
+                    machine_id,
+                    machine_name,
+                    source_type,
+                    app_version,
+                    snapshot_json,
+                    summary_json,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+            return {
+                "project_id": project_id,
+                "machine_id": machine_id,
+                "machine_name": machine_name,
+                "source_type": source_type,
+                "app_version": app_version,
+                "received_at": now,
+            }
+        finally:
+            conn.close()
+
+    def list_project_snapshots(self, project_id: str) -> List[dict]:
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM cp_project_snapshots
+                WHERE project_id = ?
+                ORDER BY received_at DESC, updated_at DESC
+                """,
+                (project_id,),
+            ).fetchall()
+            results: list[dict] = []
+            for row in rows:
+                item = dict(row)
+                try:
+                    item["snapshot"] = json.loads(item.get("snapshot_json") or "{}")
+                except json.JSONDecodeError:
+                    item["snapshot"] = {}
+                try:
+                    item["summary"] = json.loads(item.get("summary_json") or "{}")
+                except json.JSONDecodeError:
+                    item["summary"] = {}
+                results.append(item)
+            return results
+        finally:
+            conn.close()
+
+    def get_latest_project_snapshot(self, project_id: str) -> Optional[dict]:
+        snapshots = self.list_project_snapshots(project_id)
+        return snapshots[0] if snapshots else None
+
     # ── metrics / stats ───────────────────────────────────────────────
 
     def get_dashboard_stats(self) -> dict:

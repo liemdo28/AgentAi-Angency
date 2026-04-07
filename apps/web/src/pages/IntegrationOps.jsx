@@ -65,6 +65,7 @@ export default function IntegrationOps() {
   const latestQbSync = ops.latest_qb_sync || [];
   const latestAttempts = ops.latest_qb_attempts || [];
   const suggestions = ops.ai_suggestions || [];
+  const remoteNodes = ops.remote_nodes || [];
 
   return (
     <div className="page">
@@ -204,6 +205,18 @@ export default function IntegrationOps() {
               <span className="settings-val">{project.name}</span>
             </div>
             <div className="settings-item">
+              <span className="settings-key">Mode</span>
+              <span className="settings-val">{ops.source_mode || 'local'}</span>
+            </div>
+            <div className="settings-item">
+              <span className="settings-key">Machine</span>
+              <span className="settings-val">{ops.source_machine_name || '-'}</span>
+            </div>
+            <div className="settings-item">
+              <span className="settings-key">Machine ID</span>
+              <span className="settings-val">{ops.source_machine_id || '-'}</span>
+            </div>
+            <div className="settings-item">
               <span className="settings-key">Branch</span>
               <span className="settings-val">{project.branch || '-'}</span>
             </div>
@@ -214,6 +227,33 @@ export default function IntegrationOps() {
             <div className="settings-item">
               <span className="settings-key">Snapshot</span>
               <span className="settings-val">{formatDateTime(ops.generated_at)}</span>
+            </div>
+            <div className="settings-item">
+              <span className="settings-key">Received</span>
+              <span className="settings-val">{formatDateTime(ops.source_received_at)}</span>
+            </div>
+          </div>
+
+          <div className="integration-panel">
+            <div className="section-title">Observed Machines</div>
+            <div className="project-feed">
+              {remoteNodes.length === 0 && (
+                <div className="project-feed-empty">No remote publishers yet. Local snapshot fallback is active.</div>
+              )}
+              {remoteNodes.map((node) => (
+                <div key={node.machine_id || node.machine_name} className="project-feed-row">
+                  <div>
+                    <div className="project-feed-title">{node.machine_name || 'Unknown machine'}</div>
+                    <div className="project-feed-sub">
+                      {(node.source_type || 'integration-full')} · {formatDateTime(node.received_at)}
+                    </div>
+                    <div className="project-feed-sub">
+                      Download gaps: {node.summary?.download_gap_count ?? 0} · QB gaps: {node.summary?.qb_gap_count ?? 0}
+                    </div>
+                  </div>
+                  <span className="badge success">{node.machine_id || 'node'}</span>
+                </div>
+              ))}
             </div>
           </div>
         </div>
