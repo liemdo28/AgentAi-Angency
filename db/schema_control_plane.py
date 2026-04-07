@@ -308,4 +308,31 @@ CREATE TABLE IF NOT EXISTS cp_ai_agents (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS cp_policy_versions (
+    id TEXT PRIMARY KEY,
+    policy_id TEXT NOT NULL REFERENCES cp_policies(id),
+    version_number INTEGER NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    change_note TEXT DEFAULT '',
+    created_by TEXT DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cp_policy_versions_policy ON cp_policy_versions(policy_id, version_number DESC);
+
+CREATE TABLE IF NOT EXISTS cp_policy_simulations (
+    id TEXT PRIMARY KEY,
+    policy_id TEXT,
+    actor_type TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    actor_role TEXT DEFAULT '',
+    store_id TEXT,
+    department_id TEXT,
+    action TEXT NOT NULL,
+    permission_key TEXT,
+    context_json TEXT DEFAULT '{}',
+    result_json TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cp_policy_simulations_created ON cp_policy_simulations(created_at DESC);
 """

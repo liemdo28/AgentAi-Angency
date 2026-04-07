@@ -166,6 +166,7 @@ class ControlPlaneDB:
         try:
             conn.executescript(CONTROL_PLANE_SCHEMA)
             self._ensure_edge_command_columns(conn)
+            self._ensure_approval_columns(conn)
             self._seed_governance_defaults(conn)
             conn.commit()
             logger.info("Control plane schema ready (%s)", self.db_path)
@@ -215,6 +216,26 @@ class ControlPlaneDB:
                 ON cp_edge_commands(project_id, machine_id, lease_expires_at)
             """
         )
+
+    def _ensure_approval_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(cp_approvals)").fetchall()
+        }
+        required = {
+            "resource_type": "ALTER TABLE cp_approvals ADD COLUMN resource_type TEXT DEFAULT 'task'",
+            "resource_id": "ALTER TABLE cp_approvals ADD COLUMN resource_id TEXT DEFAULT ''",
+            "approval_level": "ALTER TABLE cp_approvals ADD COLUMN approval_level TEXT DEFAULT 'supervisor'",
+            "policy_code": "ALTER TABLE cp_approvals ADD COLUMN policy_code TEXT DEFAULT ''",
+            "store_id": "ALTER TABLE cp_approvals ADD COLUMN store_id TEXT",
+            "department_id": "ALTER TABLE cp_approvals ADD COLUMN department_id TEXT",
+            "request_json": "ALTER TABLE cp_approvals ADD COLUMN request_json TEXT DEFAULT '{}'",
+            "decision_json": "ALTER TABLE cp_approvals ADD COLUMN decision_json TEXT DEFAULT '{}'",
+            "expires_at": "ALTER TABLE cp_approvals ADD COLUMN expires_at TEXT",
+        }
+        for column, statement in required.items():
+            if column not in existing:
+                conn.execute(statement)
 
     def _now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
@@ -293,6 +314,23 @@ class ControlPlaneDB:
                     now,
                 ),
             )
+            policy_row = conn.execute(
+                "SELECT id, policy_code, policy_name, scope_type, target_type, target_id, condition_json, effect, approval_chain_json, escalation_json, audit_required, priority, is_active, effective_from, effective_to, created_by, updated_by, created_at, updated_at FROM cp_policies WHERE policy_code = ?",
+                (item["policy_code"],),
+            ).fetchone()
+            if policy_row:
+                version_exists = conn.execute(
+                    "SELECT 1 FROM cp_policy_versions WHERE policy_id = ? LIMIT 1",
+                    (policy_row["id"],),
+                ).fetchone()
+                if not version_exists:
+                    self._create_policy_version(
+                        conn,
+                        policy_id=policy_row["id"],
+                        snapshot=self._hydrate_policy(policy_row) or {},
+                        created_by="system",
+                        change_note="Seeded default policy",
+                    )
 
     def _hydrate_department(self, row: sqlite3.Row | None) -> Optional[dict]:
         if not row:
@@ -334,6 +372,14 @@ class ControlPlaneDB:
         item = dict(row)
         item["before"] = self._decode_json(item.get("before_json"))
         item["after"] = self._decode_json(item.get("after_json"))
+        return item
+
+    def _hydrate_approval(self, row: sqlite3.Row | None) -> Optional[dict]:
+        if not row:
+            return None
+        item = dict(row)
+        item["request"] = self._decode_json(item.get("request_json"))
+        item["decision"] = self._decode_json(item.get("decision_json"))
         return item
 
     def _department_permission_map(self, conn: sqlite3.Connection, department_id: str) -> dict[str, bool]:
@@ -523,6 +569,32 @@ class ControlPlaneDB:
                 now,
                 now,
             ),
+        )
+
+    def _ensure_task_stub(self, conn: sqlite3.Connection, task_id: str, title: str, description: str = "") -> None:
+        existing = conn.execute("SELECT id FROM cp_tasks WHERE id = ?", (task_id,)).fetchone()
+        if existing:
+            return
+        agent_row = conn.execute("SELECT id FROM cp_agents ORDER BY created_at ASC LIMIT 1").fetchone()
+        if not agent_row:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO cp_agents (id, role, agent_type, model, budget_limit, status, config_json, total_cost, created_at)
+                VALUES ('workflow', 'Workflow', 'system', '', 50.0, 'active', '{}', 0.0, ?)
+                """,
+                (self._now(),),
+            )
+            assigned_agent_id = "workflow"
+        else:
+            assigned_agent_id = agent_row["id"]
+        conn.execute(
+            """
+            INSERT INTO cp_tasks (
+                id, goal_id, assigned_agent_id, title, description, task_type,
+                status, priority, retry_count, context_json, approval_status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'governance_action', 'pending', 2, 0, '{}', 'pending', ?, ?)
+            """,
+            (task_id, None, assigned_agent_id, title, description, self._now(), self._now()),
         )
 
     # ── goals ─────────────────────────────────────────────────────────
@@ -724,29 +796,69 @@ class ControlPlaneDB:
 
     # ── approvals ─────────────────────────────────────────────────────
 
-    def request_approval(self, task_id: str, requested_by: str = "system") -> dict:
+    def request_approval(
+        self,
+        task_id: str,
+        requested_by: str = "system",
+        *,
+        resource_type: str = "task",
+        resource_id: str | None = None,
+        approval_level: str = "supervisor",
+        policy_code: str = "",
+        store_id: str | None = None,
+        department_id: str | None = None,
+        request_payload: dict | None = None,
+        expires_at: str | None = None,
+    ) -> dict:
         aid = str(uuid4())
+        now = self._now()
         conn = self._conn()
         try:
+            self._ensure_task_stub(
+                conn,
+                task_id,
+                title=f"Approval required: {resource_type}",
+                description=f"Governance approval placeholder for {resource_id or task_id}",
+            )
             conn.execute(
-                "INSERT INTO cp_approvals (id, task_id, requested_by) VALUES (?, ?, ?)",
-                (aid, task_id, requested_by),
+                """
+                INSERT INTO cp_approvals (
+                    id, task_id, requested_by, status, created_at,
+                    resource_type, resource_id, approval_level, policy_code,
+                    store_id, department_id, request_json, decision_json, expires_at
+                ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?)
+                """,
+                (
+                    aid,
+                    task_id,
+                    requested_by,
+                    now,
+                    resource_type,
+                    resource_id or task_id,
+                    approval_level,
+                    policy_code,
+                    store_id,
+                    department_id,
+                    json.dumps(request_payload or {}, ensure_ascii=False),
+                    expires_at,
+                ),
             )
             conn.commit()
-            return {"id": aid, "task_id": task_id, "status": "pending"}
+            row = conn.execute("SELECT * FROM cp_approvals WHERE id = ?", (aid,)).fetchone()
+            return self._hydrate_approval(row) or {"id": aid, "task_id": task_id, "status": "pending"}
         finally:
             conn.close()
 
     def resolve_approval(self, approval_id: str, status: str,
-                         approved_by: str = "", reason: str = "") -> None:
+                         approved_by: str = "", reason: str = "", decision_payload: dict | None = None) -> Optional[dict]:
         now = datetime.now(timezone.utc).isoformat()
         conn = self._conn()
         try:
             conn.execute(
                 """UPDATE cp_approvals
-                   SET status = ?, approved_by = ?, reason = ?, resolved_at = ?
+                   SET status = ?, approved_by = ?, reason = ?, resolved_at = ?, decision_json = ?
                    WHERE id = ?""",
-                (status, approved_by, reason, now, approval_id),
+                (status, approved_by, reason, now, json.dumps(decision_payload or {}, ensure_ascii=False), approval_id),
             )
             # Also update the task's approval_status
             row = conn.execute(
@@ -758,17 +870,25 @@ class ControlPlaneDB:
                     (status, row["task_id"]),
                 )
             conn.commit()
+            refreshed = conn.execute("SELECT * FROM cp_approvals WHERE id = ?", (approval_id,)).fetchone()
+            return self._hydrate_approval(refreshed)
         finally:
             conn.close()
 
-    def list_approvals(self, status: str = "pending") -> List[dict]:
+    def list_approvals(self, status: str = "pending", resource_type: str | None = None) -> List[dict]:
         conn = self._conn()
         try:
-            rows = conn.execute(
-                "SELECT * FROM cp_approvals WHERE status = ? ORDER BY created_at DESC",
-                (status,),
-            ).fetchall()
-            return [dict(r) for r in rows]
+            if resource_type:
+                rows = conn.execute(
+                    "SELECT * FROM cp_approvals WHERE status = ? AND resource_type = ? ORDER BY created_at DESC",
+                    (status, resource_type),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM cp_approvals WHERE status = ? ORDER BY created_at DESC",
+                    (status,),
+                ).fetchall()
+            return [item for item in (self._hydrate_approval(r) for r in rows) if item]
         finally:
             conn.close()
 
@@ -1771,6 +1891,53 @@ class ControlPlaneDB:
         finally:
             conn.close()
 
+    def _create_policy_version(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        policy_id: str,
+        snapshot: dict,
+        created_by: str = "",
+        change_note: str = "",
+    ) -> None:
+        version_row = conn.execute(
+            "SELECT COALESCE(MAX(version_number), 0) AS v FROM cp_policy_versions WHERE policy_id = ?",
+            (policy_id,),
+        ).fetchone()
+        next_version = (version_row["v"] if version_row else 0) + 1
+        conn.execute(
+            """
+            INSERT INTO cp_policy_versions (
+                id, policy_id, version_number, snapshot_json, change_note, created_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid4()),
+                policy_id,
+                next_version,
+                json.dumps(snapshot or {}, ensure_ascii=False),
+                change_note,
+                created_by,
+                self._now(),
+            ),
+        )
+
+    def list_policy_versions(self, policy_id: str) -> List[dict]:
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM cp_policy_versions WHERE policy_id = ? ORDER BY version_number DESC",
+                (policy_id,),
+            ).fetchall()
+            result = []
+            for row in rows:
+                item = dict(row)
+                item["snapshot"] = self._decode_json(item.get("snapshot_json"))
+                result.append(item)
+            return result
+        finally:
+            conn.close()
+
     def create_policy(self, payload: dict, *, actor_id: str = "ceo", actor_type: str = "human") -> dict:
         now = self._now()
         policy_id = str(uuid4())
@@ -1806,6 +1973,14 @@ class ControlPlaneDB:
                     now,
                     now,
                 ),
+            )
+            snapshot = self._hydrate_policy(conn.execute("SELECT * FROM cp_policies WHERE id = ?", (policy_id,)).fetchone())
+            self._create_policy_version(
+                conn,
+                policy_id=policy_id,
+                snapshot=snapshot or {},
+                created_by=actor_id,
+                change_note="Policy created",
             )
             self._log_audit(
                 conn,
@@ -1858,6 +2033,13 @@ class ControlPlaneDB:
             )
             conn.commit()
             after = self.get_policy(policy_id)
+            self._create_policy_version(
+                conn,
+                policy_id=policy_id,
+                snapshot=after or {},
+                created_by=actor_id,
+                change_note=payload.get("change_note", "Policy updated") if isinstance(payload, dict) else "Policy updated",
+            )
             self._log_audit(
                 conn,
                 actor_type=actor_type,
@@ -1904,6 +2086,29 @@ class ControlPlaneDB:
         try:
             rows = conn.execute(sql, params).fetchall()
             return [item for item in (self._hydrate_audit_log(row) for row in rows) if item]
+        finally:
+            conn.close()
+
+    def list_policy_simulations(self, *, limit: int = 50, policy_id: str | None = None) -> List[dict]:
+        conn = self._conn()
+        try:
+            if policy_id:
+                rows = conn.execute(
+                    "SELECT * FROM cp_policy_simulations WHERE policy_id = ? ORDER BY created_at DESC LIMIT ?",
+                    (policy_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM cp_policy_simulations ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            items = []
+            for row in rows:
+                item = dict(row)
+                item["context"] = self._decode_json(item.get("context_json"))
+                item["result"] = self._decode_json(item.get("result_json"))
+                items.append(item)
+            return items
         finally:
             conn.close()
 
@@ -1991,6 +2196,39 @@ class ControlPlaneDB:
                     allowed = actor_role in {"ceo", "super_admin"}
                     decision = "allow" if allowed else "deny"
 
+            simulation_id = str(uuid4())
+            conn.execute(
+                """
+                INSERT INTO cp_policy_simulations (
+                    id, policy_id, actor_type, actor_id, actor_role, store_id, department_id,
+                    action, permission_key, context_json, result_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    simulation_id,
+                    matched["id"] if matched else None,
+                    payload.get("actor_type", "human"),
+                    payload.get("actor_id", "unknown"),
+                    actor_role,
+                    store_id,
+                    department_id,
+                    action_name,
+                    permission_key,
+                    json.dumps(context, ensure_ascii=False),
+                    json.dumps(
+                        {
+                            "allowed": allowed,
+                            "decision": decision,
+                            "matched_policy": matched["policy_code"] if matched else None,
+                            "escalation": escalation,
+                            "approval_chain": approval_chain,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    self._now(),
+                ),
+            )
+
             if (matched and matched.get("audit_required")) or decision != "allow":
                 self._log_audit(
                     conn,
@@ -2005,7 +2243,7 @@ class ControlPlaneDB:
                     store_id=store_id,
                     department_id=department_id,
                 )
-                conn.commit()
+            conn.commit()
 
             return {
                 "allowed": allowed,
@@ -2014,9 +2252,37 @@ class ControlPlaneDB:
                 "escalation": escalation,
                 "approval_chain": approval_chain,
                 "execution_mode": assignment.get("execution_mode") if assignment and assignment.get("execution_mode") else department.get("execution_mode", "suggest_only"),
+                "simulation_id": simulation_id,
             }
         finally:
             conn.close()
+
+    def request_governed_action(self, payload: dict) -> dict:
+        result = self.evaluate_governance_action(payload)
+        if result["decision"] not in {"require_approval", "require_ceo_approval"}:
+            return {"status": result["decision"], "evaluation": result, "approval": None}
+
+        approval_level = "ceo" if result["decision"] == "require_ceo_approval" else ((result.get("approval_chain") or ["supervisor"])[0])
+        approval = self.request_approval(
+            payload.get("task_id") or f"governance:{payload.get('department_id')}:{payload.get('action')}",
+            requested_by=payload.get("actor_id", "agentai"),
+            resource_type="department_action",
+            resource_id=f"{payload.get('department_id')}:{payload.get('action')}",
+            approval_level=approval_level,
+            policy_code=result.get("matched_policy") or "",
+            store_id=payload.get("store_id"),
+            department_id=payload.get("department_id"),
+            request_payload={
+                "actor_type": payload.get("actor_type", "agent"),
+                "actor_id": payload.get("actor_id", "agentai"),
+                "actor_role": payload.get("actor_role", ""),
+                "action": payload.get("action"),
+                "permission_key": payload.get("permission_key"),
+                "context": payload.get("context") or {},
+                "evaluation": result,
+            },
+        )
+        return {"status": "pending_approval", "evaluation": result, "approval": approval}
 
     # ── metrics / stats ───────────────────────────────────────────────
 

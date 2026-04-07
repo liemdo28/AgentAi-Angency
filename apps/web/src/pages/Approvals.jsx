@@ -5,13 +5,14 @@ export default function Approvals() {
   const [approvals, setApprovals] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [filter, setFilter] = useState('pending');
+  const [resourceType, setResourceType] = useState('all');
 
   const load = () => {
-    listApprovals(filter).then(setApprovals).catch(() => {});
+    listApprovals(filter, resourceType === 'all' ? undefined : resourceType).then(setApprovals).catch(() => {});
     listTasks().then(setTasks).catch(() => {});
   };
 
-  useEffect(() => { load(); }, [filter]);
+  useEffect(() => { load(); }, [filter, resourceType]);
 
   const getTaskTitle = (taskId) => {
     const t = tasks.find(t => t.id === taskId);
@@ -34,6 +35,13 @@ export default function Approvals() {
             </button>
           ))}
         </div>
+        <div className="tab-bar">
+          {['all', 'task', 'department_action'].map(s => (
+            <button key={s} className={`tab-btn ${resourceType === s ? 'active' : ''}`} onClick={() => setResourceType(s)}>
+              {s === 'department_action' ? 'Governance' : s.charAt(0).toUpperCase() + s.slice(1)}
+            </button>
+          ))}
+        </div>
       </div>
 
       {approvals.length === 0 && (
@@ -51,6 +59,11 @@ export default function Approvals() {
               <div className="approval-meta">
                 Requested by <strong>{a.requested_by}</strong> at {a.created_at?.slice(0, 16).replace('T', ' ')}
               </div>
+              {a.resource_type === 'department_action' && (
+                <div className="text-dim mt-2" style={{ fontSize: 12 }}>
+                  {a.approval_level} approval · {a.policy_code || 'no policy'} · {a.request?.action || 'department action'}
+                </div>
+              )}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span className={`badge ${a.status}`}>{a.status}</span>

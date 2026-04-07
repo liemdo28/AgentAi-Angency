@@ -33,10 +33,12 @@ export const registerAgent = (data) => request('/agents', { method: 'POST', body
 export const listJobs = (taskId) => request(`/jobs${taskId ? `?task_id=${taskId}` : ''}`);
 
 // Approvals
-export const listApprovals = (status = 'pending') => request(`/approvals?status=${status}`);
+export const listApprovals = (status = 'pending', resourceType) =>
+  request(`/approvals?status=${status}${resourceType ? `&resource_type=${encodeURIComponent(resourceType)}` : ''}`);
 export const requestApproval = (taskId) => request(`/approvals/${taskId}/request`, { method: 'POST' });
 export const resolveApproval = (id, data) =>
   request(`/approvals/${id}/resolve`, { method: 'POST', body: JSON.stringify(data) });
+export const listGovernanceApprovals = (status = 'pending') => request(`/approvals?status=${status}&resource_type=department_action`);
 
 // Smart Issues
 export const planSmartIssue = (text) => request('/issues/plan', { method: 'POST', body: JSON.stringify({ text }) });
@@ -91,6 +93,14 @@ export const updatePolicy = (id, data) => request(`/policies/${id}`, { method: '
 export const activatePolicy = (id) => request(`/policies/${id}/activate`, { method: 'POST' });
 export const deactivatePolicy = (id) => request(`/policies/${id}/deactivate`, { method: 'POST' });
 export const evaluatePolicy = (data) => request('/policies/evaluate', { method: 'POST', body: JSON.stringify(data) });
+export const requestGovernedAction = (data) => request('/governance/actions/request', { method: 'POST', body: JSON.stringify(data) });
+export const listPolicyVersions = (id) => request(`/policies/${id}/versions`);
+export const listPolicySimulations = (params = {}) => {
+  const query = new URLSearchParams(
+    Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== '')
+  ).toString();
+  return request(`/policies/simulations${query ? `?${query}` : ''}`);
+};
 export const listAuditLogs = (params = {}) => {
   const query = new URLSearchParams(
     Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== '')

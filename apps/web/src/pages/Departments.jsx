@@ -13,8 +13,11 @@ import {
   listDepartments,
   listPermissions,
   listPolicies,
+  listPolicySimulations,
+  listPolicyVersions,
   listStores,
   lockDepartment,
+  requestGovernedAction,
   restoreDepartment,
   unhideDepartment,
   unlockDepartment,
@@ -77,6 +80,8 @@ export default function Departments() {
   const [stores, setStores] = useState([]);
   const [policies, setPolicies] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
+  const [simulations, setSimulations] = useState([]);
+  const [policyVersions, setPolicyVersions] = useState([]);
   const [selectedDepartmentId, setSelectedDepartmentId] = useState('');
   const [selectedStoreId, setSelectedStoreId] = useState('');
   const [storeMatrix, setStoreMatrix] = useState([]);
@@ -120,6 +125,7 @@ export default function Departments() {
     setPolicies(policyData);
     setAuditLogs(auditData);
     setStores(storeData);
+    setSimulations(await listPolicySimulations({ limit: 20 }));
     if (!selectedDepartmentId && departmentData[0]) {
       setSelectedDepartmentId(departmentData[0].id);
     }
@@ -161,6 +167,14 @@ export default function Departments() {
       setPolicyEvalForm((prev) => ({ ...prev, department_id: selectedDepartment.id }));
     }
   }, [selectedDepartment]);
+
+  useEffect(() => {
+    if (!policies.length) {
+      setPolicyVersions([]);
+      return;
+    }
+    listPolicyVersions(policies[0].id).then(setPolicyVersions).catch(() => setPolicyVersions([]));
+  }, [policies]);
 
   const refreshStoreMatrix = async () => {
     if (!selectedStoreId) return;
@@ -274,6 +288,22 @@ export default function Departments() {
       setPolicyEvalResult(result);
     } catch (error) {
       window.alert(`Evaluation failed: ${error.message}`);
+    }
+  };
+
+  const handleGovernedRequest = async () => {
+    try {
+      const result = await requestGovernedAction({
+        ...policyEvalForm,
+        task_id: null,
+        store_id: policyEvalForm.store_id || null,
+        permission_key: policyEvalForm.permission_key || null,
+        context: JSON.parse(policyEvalForm.context_json || '{}'),
+      });
+      setPolicyEvalResult(result);
+      setSimulations(await listPolicySimulations({ limit: 20 }));
+    } catch (error) {
+      window.alert(`Request failed: ${error.message}`);
     }
   };
 
@@ -553,34 +583,75 @@ export default function Departments() {
               <div className="form-group mt-2"><label>Permission Key</label><input value={policyEvalForm.permission_key} onChange={(e) => setPolicyEvalForm({ ...policyEvalForm, permission_key: e.target.value })} /></div>
               <div className="form-group mt-2"><label>Context JSON</label><textarea rows={4} value={policyEvalForm.context_json} onChange={(e) => setPolicyEvalForm({ ...policyEvalForm, context_json: e.target.value })} /></div>
               <div style={{ marginTop: 16 }}>
-                <button className="btn btn-primary" onClick={handlePolicyEvaluate}>Evaluate</button>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button className="btn btn-primary" onClick={handlePolicyEvaluate}>Evaluate</button>
+                  <button className="btn btn-ghost" onClick={handleGovernedRequest}>Request Approval / Run</button>
+                </div>
               </div>
               {policyEvalResult && (
                 <div className="project-suggestion-card" style={{ marginTop: 14 }}>
-                  <div className="project-feed-title">{policyEvalResult.decision}</div>
-                  <div className="project-feed-sub">Matched policy: {policyEvalResult.matched_policy || 'none'}</div>
-                  <div className="project-feed-sub">Escalation: {policyEvalResult.escalation || 'none'}</div>
-                  <div className="project-feed-sub">Execution mode: {policyEvalResult.execution_mode || '-'}</div>
+                  <div className="project-feed-title">{policyEvalResult.decision || policyEvalResult.status}</div>
+                  <div className="project-feed-sub">Matched policy: {(policyEvalResult.matched_policy || policyEvalResult.evaluation?.matched_policy) || 'none'}</div>
+                  <div className="project-feed-sub">Escalation: {(policyEvalResult.escalation || policyEvalResult.evaluation?.escalation) || 'none'}</div>
+                  <div className="project-feed-sub">Execution mode: {(policyEvalResult.execution_mode || policyEvalResult.evaluation?.execution_mode) || '-'}</div>
+                  {policyEvalResult.approval && <div className="project-feed-sub">Approval queued: {policyEvalResult.approval.approval_level} · {policyEvalResult.approval.id.slice(0, 8)}</div>}
                 </div>
               )}
+            </div>
+
+            <div className="settings-card">
+              <h3>Policy Versions</h3>
+              <div className="project-feed">
+                {policyVersions.length === 0 && <div className="project-feed-empty">No version history yet.</div>}
+                {policyVersions.slice(0, 6).map((item) => (
+                  <div key={item.id} className="project-feed-row">
+                    <div>
+                      <div className="project-feed-title">v{item.version_number} · {item.snapshot?.policy_name || item.snapshot?.policy_code}</div>
+                      <div className="project-feed-sub">{item.change_note || 'Policy updated'} · {formatDate(item.created_at)}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
       )}
 
       {tab === 'audit' && (
-        <div className="governance-panel">
-          <div className="section-title">Audit Trail</div>
-          <div className="project-feed">
-            {auditLogs.map((item) => (
-              <div key={item.id} className="project-feed-row">
-                <div>
-                  <div className="project-feed-title">{item.action}</div>
-                  <div className="project-feed-sub">{item.actor_type}:{item.actor_id} · {item.resource_type} · {formatDate(item.created_at)}</div>
+        <div className="governance-layout">
+          <div className="governance-panel">
+            <div className="section-title">Audit Trail</div>
+            <div className="project-feed">
+              {auditLogs.map((item) => (
+                <div key={item.id} className="project-feed-row">
+                  <div>
+                    <div className="project-feed-title">{item.action}</div>
+                    <div className="project-feed-sub">{item.actor_type}:{item.actor_id} · {item.resource_type} · {formatDate(item.created_at)}</div>
+                  </div>
+                  <span className={`badge ${item.status === 'success' ? 'success' : item.status === 'blocked' ? 'failed' : 'pending'}`}>{item.status}</span>
                 </div>
-                <span className={`badge ${item.status === 'success' ? 'success' : item.status === 'blocked' ? 'failed' : 'pending'}`}>{item.status}</span>
+              ))}
+            </div>
+          </div>
+
+          <div className="governance-side">
+            <div className="settings-card">
+              <h3>Policy Simulations</h3>
+              <div className="project-feed">
+                {simulations.length === 0 && <div className="project-feed-empty">No simulations yet.</div>}
+                {simulations.map((item) => (
+                  <div key={item.id} className="project-feed-row">
+                    <div>
+                      <div className="project-feed-title">{item.action}</div>
+                      <div className="project-feed-sub">{item.actor_role || item.actor_type} · {item.department_id || 'n/a'} · {formatDate(item.created_at)}</div>
+                    </div>
+                    <span className={`badge ${item.result?.decision === 'deny' || item.result?.decision?.includes('approval') ? 'pending' : 'success'}`}>
+                      {item.result?.decision || 'allow'}
+                    </span>
+                  </div>
+                ))}
               </div>
-            ))}
+            </div>
           </div>
         </div>
       )}

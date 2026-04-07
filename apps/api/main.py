@@ -212,6 +212,10 @@ class GovernanceEvaluateRequest(BaseModel):
     context: dict | None = None
 
 
+class GovernanceActionRequest(GovernanceEvaluateRequest):
+    task_id: str | None = None
+
+
 # ── Dashboard ─────────────────────────────────────────────────────────
 
 @app.get("/")
@@ -370,8 +374,8 @@ def list_jobs(task_id: Optional[str] = None, limit: int = 50):
 # ── Approvals ─────────────────────────────────────────────────────────
 
 @app.get("/approvals")
-def list_approvals(status: str = "pending"):
-    return db.list_approvals(status=status)
+def list_approvals(status: str = "pending", resource_type: str | None = None):
+    return db.list_approvals(status=status, resource_type=resource_type)
 
 
 @app.post("/approvals/{task_id}/request")
@@ -381,13 +385,13 @@ def request_approval(task_id: str):
 
 @app.post("/approvals/{approval_id}/resolve")
 def resolve_approval(approval_id: str, body: ApprovalResolve):
-    db.resolve_approval(
+    approval = db.resolve_approval(
         approval_id=approval_id,
         status=body.status,
         approved_by=body.approved_by,
         reason=body.reason,
     )
-    return {"status": body.status}
+    return {"status": body.status, "approval": approval}
 
 
 # ── Activity Feed ─────────────────────────────────────────────────────
@@ -692,6 +696,21 @@ def deactivate_policy(policy_id: str, x_actor_id: str | None = Header(default=No
 @app.post("/policies/evaluate")
 def evaluate_policy(body: GovernanceEvaluateRequest):
     return db.evaluate_governance_action(body.model_dump())
+
+
+@app.post("/governance/actions/request")
+def request_governed_action(body: GovernanceActionRequest):
+    return db.request_governed_action(body.model_dump())
+
+
+@app.get("/policies/{policy_id}/versions")
+def list_policy_versions(policy_id: str):
+    return db.list_policy_versions(policy_id)
+
+
+@app.get("/policies/simulations")
+def list_policy_simulations(limit: int = 50, policy_id: str | None = None):
+    return db.list_policy_simulations(limit=limit, policy_id=policy_id)
 
 
 @app.get("/audit-logs")

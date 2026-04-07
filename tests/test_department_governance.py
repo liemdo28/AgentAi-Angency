@@ -126,3 +126,58 @@ def test_policy_evaluation_requires_approval_for_negative_review(monkeypatch, tm
     audit_logs = client.get("/audit-logs?department_id=" + review_department["id"])
     assert audit_logs.status_code == 200
     assert any("governance.evaluate.require_approval" == item["action"] for item in audit_logs.json())
+
+
+def test_governed_action_creates_approval_and_versions_exist(monkeypatch, tmp_path):
+    client, db = _client(monkeypatch, tmp_path)
+    review_department = next(item for item in db.list_departments() if item["code"] == "REVIEW_MANAGEMENT")
+    db.set_department_permissions(
+        review_department["id"],
+        [{"key": "reviews.reply", "allowed": True}],
+    )
+    db.upsert_store_departments(
+        "RAW",
+        [
+            {
+                "department_id": review_department["id"],
+                "enabled": True,
+                "locked": False,
+                "hidden": False,
+                "deleted": False,
+                "custom_policy_enabled": False,
+                "execution_mode": "semi_auto",
+            }
+        ],
+    )
+
+    request_result = client.post(
+        "/governance/actions/request",
+        json={
+            "actor_type": "agent",
+            "actor_id": "agent-review-01",
+            "actor_role": "department_head",
+            "store_id": "RAW",
+            "department_id": review_department["id"],
+            "action": "reviews.reply.publish",
+            "permission_key": "reviews.reply",
+            "context": {"rating": 2, "sentiment": "negative"},
+        },
+    )
+    assert request_result.status_code == 200
+    body = request_result.json()
+    assert body["status"] == "pending_approval"
+    assert body["approval"]["resource_type"] == "department_action"
+    assert body["approval"]["approval_level"] == "store_manager"
+
+    approvals = client.get("/approvals?status=pending&resource_type=department_action")
+    assert approvals.status_code == 200
+    assert len(approvals.json()) >= 1
+
+    first_policy = client.get("/policies").json()[0]
+    versions = client.get(f"/policies/{first_policy['id']}/versions")
+    assert versions.status_code == 200
+    assert len(versions.json()) >= 1
+
+    simulations = client.get("/policies/simulations?limit=10")
+    assert simulations.status_code == 200
+    assert any(item["action"] == "reviews.reply.publish" for item in simulations.json())
