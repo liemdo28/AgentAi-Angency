@@ -34,6 +34,7 @@ from pydantic import BaseModel
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from db.repository import ControlPlaneDB
+from apps.api.project_ops import build_project_ops_profile
 from core.orchestrator.registry import AgentRegistry
 from core.policies.engine import PolicyEngine
 from core.orchestrator.engine import Orchestrator
@@ -354,6 +355,7 @@ PROJECT_REGISTRY = {
         "type": "html",
         "category": "website",
         "description": "Official restaurant website — menu, locations, ordering",
+        "relative_path": "BakudanWebsite_Sub",
         "port": None,
         "tech": ["HTML", "CSS", "JavaScript"],
         "github": "liemdo28/bakudanwebsite_sub",
@@ -363,6 +365,7 @@ PROJECT_REGISTRY = {
         "type": "html",
         "category": "website",
         "description": "Secondary iteration of restaurant website",
+        "relative_path": "BakudanWebsite_Sub2",
         "port": None,
         "tech": ["HTML", "CSS", "JavaScript"],
         "github": "liemdo28/bakudanwebsite_sub2",
@@ -372,6 +375,7 @@ PROJECT_REGISTRY = {
         "type": "html",
         "category": "website",
         "description": "Restaurant website — menu, blog, analytics",
+        "relative_path": "RawWebsite",
         "port": None,
         "tech": ["HTML", "CSS", "JavaScript"],
         "github": "liemdo28/rawwebsite",
@@ -381,6 +385,7 @@ PROJECT_REGISTRY = {
         "type": "php",
         "category": "operations",
         "description": "Project management — tasks, calendar, notifications, PWA",
+        "relative_path": "dashboard.bakudanramen.com",
         "port": None,
         "tech": ["PHP", "MySQL", "PWA"],
         "github": "liemdo28/dashboard.bakudanramen.com",
@@ -390,6 +395,7 @@ PROJECT_REGISTRY = {
         "type": "node",
         "category": "analytics",
         "description": "Growth analytics dashboard on Cloudflare Pages",
+        "relative_path": "growth-dashboard",
         "port": 8789,
         "tech": ["Node.js", "Wrangler", "Cloudflare Pages"],
         "github": "liemdo28/growth-dashboard",
@@ -399,6 +405,7 @@ PROJECT_REGISTRY = {
         "type": "python",
         "category": "operations",
         "description": "Desktop app — Toast POS to QuickBooks sync",
+        "relative_path": "integration-full",
         "port": None,
         "tech": ["Python", "CustomTkinter", "Playwright"],
         "github": "liemdo28/intergration-full",
@@ -408,6 +415,7 @@ PROJECT_REGISTRY = {
         "type": "node",
         "category": "reviews",
         "description": "Next.js frontend for review management system",
+        "relative_path": "review/review-dashboard",
         "port": 3000,
         "tech": ["Next.js", "React", "Tailwind", "shadcn/ui"],
         "github": None,
@@ -417,6 +425,7 @@ PROJECT_REGISTRY = {
         "type": "node",
         "category": "reviews",
         "description": "MCP server for Yelp & Google review management",
+        "relative_path": "review/review-management-mcp",
         "port": None,
         "tech": ["TypeScript", "MCP SDK", "Electron"],
         "github": "liemdo28/review-management-mcp",
@@ -426,6 +435,7 @@ PROJECT_REGISTRY = {
         "type": "python",
         "category": "reviews",
         "description": "Auto-fetch reviews, AI reply generation, auto-post",
+        "relative_path": "review/review-system",
         "port": 8000,
         "tech": ["FastAPI", "PostgreSQL", "Redis", "OpenAI"],
         "github": "liemdo28/review-automation-system",
@@ -612,6 +622,10 @@ def _resolve_integration_snapshot(project_path: Path) -> dict | None:
     return local_snapshot
 
 
+def _resolve_project_path(project_id: str, meta: dict) -> Path:
+    return MASTER_DIR / Path(meta.get("relative_path") or project_id)
+
+
 @app.post("/edge/projects/{project_id}/snapshot")
 def upsert_edge_project_snapshot(
     project_id: str,
@@ -761,10 +775,11 @@ def list_projects():
     """List all projects from the Master directory with live git info."""
     projects = []
     for dir_name, meta in PROJECT_REGISTRY.items():
-        project_path = MASTER_DIR / dir_name
+        project_path = _resolve_project_path(dir_name, meta)
         git = _git_info(project_path)
         status = _detect_status(project_path, meta.get("port"))
         integration_ops = _resolve_integration_snapshot(project_path) if dir_name == "integration-full" else None
+        ops_profile = build_project_ops_profile(dir_name, project_path, meta, status)
 
         projects.append({
             "id": dir_name,
@@ -783,6 +798,7 @@ def list_projects():
             "dirty": git["dirty"],
             "local_path": str(project_path),
             "integration_ops": integration_ops,
+            "ops_profile": ops_profile,
         })
     return projects
 
@@ -794,10 +810,11 @@ def get_project(project_id: str):
     if not meta:
         raise HTTPException(404, "Project not found")
 
-    project_path = MASTER_DIR / project_id
+    project_path = _resolve_project_path(project_id, meta)
     git = _git_info(project_path)
     status = _detect_status(project_path, meta.get("port"))
     integration_ops = _resolve_integration_snapshot(project_path) if project_id == "integration-full" else None
+    ops_profile = build_project_ops_profile(project_id, project_path, meta, status)
 
     # Count files
     file_count = 0
@@ -814,6 +831,7 @@ def get_project(project_id: str):
         "path": str(project_path),
         "file_count": file_count,
         "integration_ops": integration_ops,
+        "ops_profile": ops_profile,
         **git,
     }
 

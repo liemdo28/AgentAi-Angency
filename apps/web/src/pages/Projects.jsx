@@ -118,9 +118,12 @@ export default function Projects() {
         {filtered.map((p) => {
           const status = getStatusInfo(p);
           const ops = p.integration_ops;
+          const opsProfile = p.ops_profile || {};
           const latestDownload = ops?.latest_downloads || [];
           const latestQbSync = ops?.latest_qb_sync || [];
           const suggestions = ops?.ai_suggestions || [];
+          const profileSignals = opsProfile.signals || [];
+          const profileSuggestions = opsProfile.suggestions || [];
 
           return (
             <div key={p.id} className="org-card project-card" style={{ textAlign: 'left', padding: 18 }}>
@@ -261,6 +264,55 @@ export default function Projects() {
                   <div className="project-suggestion-list">
                     {suggestions.length === 0 && <div className="project-feed-empty">No suggestions right now.</div>}
                     {suggestions.map((suggestion) => (
+                      <div key={suggestion.id} className="project-suggestion-card">
+                        <div className="project-feed-title">{suggestion.title}</div>
+                        <div className="project-feed-sub">{suggestion.description}</div>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => handleSuggestion(suggestion)}
+                          disabled={busySuggestionId === suggestion.id}
+                        >
+                          {busySuggestionId === suggestion.id ? 'Creating...' : suggestion.action_label}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {!ops && opsProfile && (
+                <div className="project-ops">
+                  <div className="project-ops-grid">
+                    <div className="project-mini-stat">
+                      <div className="project-mini-label">Profile</div>
+                      <div className="project-mini-value">{opsProfile.kind || '-'}</div>
+                    </div>
+                    <div className="project-mini-stat">
+                      <div className="project-mini-label">Signals</div>
+                      <div className="project-mini-value">{profileSignals.length}</div>
+                    </div>
+                  </div>
+
+                  <div className="project-section-title">Ops Signals</div>
+                  <div className="project-feed">
+                    {profileSignals.length === 0 && <div className="project-feed-empty">No signals yet.</div>}
+                    {profileSignals.map((item) => (
+                      <div key={`${p.id}-${item.label}`} className="project-feed-row">
+                        <div>
+                          <div className="project-feed-title">{item.label}</div>
+                          <div className="project-feed-sub">{item.value}</div>
+                        </div>
+                        <span className={`badge ${item.status === 'ok' ? 'success' : item.status === 'warning' ? 'pending' : 'failed'}`}>
+                          {item.status}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="project-section-title">AI Next Actions</div>
+                  <div className="project-suggestion-list">
+                    {profileSuggestions.length === 0 && <div className="project-feed-empty">No suggestions right now.</div>}
+                    {profileSuggestions.map((suggestion) => (
                       <div key={suggestion.id} className="project-suggestion-card">
                         <div className="project-feed-title">{suggestion.title}</div>
                         <div className="project-feed-sub">{suggestion.description}</div>
