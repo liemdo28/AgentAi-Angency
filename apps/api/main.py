@@ -16,6 +16,7 @@ Run:
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import subprocess
@@ -297,7 +298,7 @@ def get_activity(limit: int = 50):
 
 MASTER_DIR = Path(os.environ.get(
     "MASTER_PROJECT_DIR",
-    Path(__file__).resolve().parent.parent.parent.parent / "Master"
+    Path(__file__).resolve().parents[3]
 ))
 
 # Registry of known projects with metadata
@@ -464,6 +465,40 @@ def _detect_status(project_path: Path, port: int | None = None) -> str:
     return "warning"
 
 
+def _load_integration_snapshot(project_path: Path) -> dict | None:
+    desktop_app_path = project_path / "desktop-app"
+    module_path = desktop_app_path / "integration_status.py"
+    if not module_path.exists():
+        return None
+
+    try:
+        desktop_app_str = str(desktop_app_path)
+        if desktop_app_str not in sys.path:
+            sys.path.insert(0, desktop_app_str)
+        module = importlib.import_module("integration_status")
+        module = importlib.reload(module)
+        return module.build_integration_snapshot(base_dir=desktop_app_path, include_today_for_suggestions=False, max_items=6)
+    except Exception as exc:
+        return {
+            "error": str(exc),
+            "summary": {
+                "stores_tracked": 0,
+                "download_rows": 0,
+                "qb_sync_rows": 0,
+                "last_download_at": None,
+                "last_qb_sync_at": None,
+                "download_gap_count": 0,
+                "qb_gap_count": 0,
+                "failed_qb_count": 0,
+            },
+            "latest_downloads": [],
+            "latest_qb_sync": [],
+            "latest_qb_attempts": [],
+            "ai_suggestions": [],
+            "world_clocks": [],
+        }
+
+
 @app.get("/projects")
 def list_projects():
     """List all projects from the Master directory with live git info."""
@@ -472,6 +507,7 @@ def list_projects():
         project_path = MASTER_DIR / dir_name
         git = _git_info(project_path)
         status = _detect_status(project_path, meta.get("port"))
+        integration_ops = _load_integration_snapshot(project_path) if dir_name == "integration-full" else None
 
         projects.append({
             "id": dir_name,
@@ -489,6 +525,7 @@ def list_projects():
             "last_commit_date": git["last_commit_date"],
             "dirty": git["dirty"],
             "local_path": str(project_path),
+            "integration_ops": integration_ops,
         })
     return projects
 
@@ -503,6 +540,7 @@ def get_project(project_id: str):
     project_path = MASTER_DIR / project_id
     git = _git_info(project_path)
     status = _detect_status(project_path, meta.get("port"))
+    integration_ops = _load_integration_snapshot(project_path) if project_id == "integration-full" else None
 
     # Count files
     file_count = 0
@@ -518,6 +556,7 @@ def get_project(project_id: str):
         "exists": project_path.exists(),
         "path": str(project_path),
         "file_count": file_count,
+        "integration_ops": integration_ops,
         **git,
     }
 
