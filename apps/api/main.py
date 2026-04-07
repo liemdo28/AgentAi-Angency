@@ -19,6 +19,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from copy import deepcopy
@@ -140,6 +141,75 @@ class EdgeMachineControlUpdate(BaseModel):
     draining: bool | None = None
     pause_reason: str | None = None
     cancel_pending: bool = False
+
+
+class DepartmentUpsert(BaseModel):
+    code: str
+    name: str
+    description: str = ""
+    category: str = "general"
+    status: str = "active"
+    allow_store_assignment: bool = True
+    allow_ai_agent_execution: bool = True
+    allow_human_assignment: bool = True
+    requires_ceo_visibility_only: bool = False
+    execution_mode: str = "suggest_only"
+    parent_department_id: str | None = None
+
+
+class DepartmentPermissionItem(BaseModel):
+    key: str
+    allowed: bool
+
+
+class DepartmentPermissionUpdate(BaseModel):
+    permissions: list[DepartmentPermissionItem]
+
+
+class StoreDepartmentAssignmentItem(BaseModel):
+    department_id: str
+    enabled: bool = True
+    locked: bool = False
+    hidden: bool = False
+    deleted: bool = False
+    custom_policy_enabled: bool = False
+    execution_mode: str | None = None
+
+
+class StoreDepartmentBulkUpdate(BaseModel):
+    departments: list[StoreDepartmentAssignmentItem]
+
+
+class StoreDepartmentPermissionUpdate(BaseModel):
+    permissions: list[DepartmentPermissionItem]
+
+
+class PolicyUpsert(BaseModel):
+    policy_code: str
+    policy_name: str
+    scope_type: str
+    target_type: str
+    target_id: str
+    condition_json: dict | None = None
+    effect: str
+    approval_chain_json: list[str] | None = None
+    escalation_json: dict | None = None
+    audit_required: bool = True
+    priority: int = 100
+    is_active: bool = True
+    effective_from: str | None = None
+    effective_to: str | None = None
+
+
+class GovernanceEvaluateRequest(BaseModel):
+    actor_type: str = "agent"
+    actor_id: str = "agentai"
+    actor_role: str = "ceo"
+    store_id: str | None = None
+    department_id: str
+    action: str
+    permission_key: str | None = None
+    context: dict | None = None
 
 
 # ── Dashboard ─────────────────────────────────────────────────────────
@@ -330,6 +400,305 @@ def get_activity(limit: int = 50):
     return {"tasks": tasks, "jobs": jobs}
 
 
+# ── Department Governance ────────────────────────────────────────────
+
+@app.get("/permissions")
+def list_permissions(module: str | None = None):
+    return db.list_permissions(module=module)
+
+
+@app.get("/departments")
+def list_departments(
+    status: str | None = None,
+    visibility: str | None = None,
+    search: str | None = None,
+    category: str | None = None,
+    x_actor_role: str | None = Header(default=None),
+):
+    _, actor_role = _actor_defaults(None, x_actor_role)
+    return db.list_departments(
+        status=status,
+        visibility=visibility,
+        search=search,
+        category=category,
+        actor_role=actor_role,
+    )
+
+
+@app.post("/departments")
+def create_department(
+    body: DepartmentUpsert,
+    x_actor_id: str | None = Header(default=None),
+    x_actor_role: str | None = Header(default=None),
+):
+    actor_id, actor_role = _actor_defaults(x_actor_id, x_actor_role)
+    if actor_role not in {"ceo", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Only CEO or Super Admin can create departments.")
+    try:
+        return db.create_department(body.model_dump(), actor_id=actor_id)
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=400, detail=f"Department create failed: {exc}") from exc
+
+
+@app.get("/departments/{department_id}")
+def get_department(department_id: str, x_actor_role: str | None = Header(default=None)):
+    _, actor_role = _actor_defaults(None, x_actor_role)
+    department = db.get_department(department_id, actor_role=actor_role)
+    if not department:
+        raise HTTPException(status_code=404, detail="Department not found.")
+    return department
+
+
+@app.put("/departments/{department_id}")
+def update_department(
+    department_id: str,
+    body: DepartmentUpsert,
+    x_actor_id: str | None = Header(default=None),
+    x_actor_role: str | None = Header(default=None),
+):
+    actor_id, actor_role = _actor_defaults(x_actor_id, x_actor_role)
+    if actor_role not in {"ceo", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Only CEO or Super Admin can edit departments.")
+    try:
+        department = db.update_department(department_id, body.model_dump(), actor_id=actor_id)
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=400, detail=f"Department update failed: {exc}") from exc
+    if not department:
+        raise HTTPException(status_code=404, detail="Department not found.")
+    return department
+
+
+@app.post("/departments/{department_id}/lock")
+def lock_department(
+    department_id: str,
+    x_actor_id: str | None = Header(default=None),
+    x_actor_role: str | None = Header(default=None),
+):
+    actor_id, actor_role = _actor_defaults(x_actor_id, x_actor_role)
+    if actor_role not in {"ceo", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Only CEO or Super Admin can lock departments.")
+    department = db.set_department_status(department_id, "locked", actor_id=actor_id)
+    if not department:
+        raise HTTPException(status_code=404, detail="Department not found.")
+    return department
+
+
+@app.post("/departments/{department_id}/unlock")
+def unlock_department(
+    department_id: str,
+    x_actor_id: str | None = Header(default=None),
+    x_actor_role: str | None = Header(default=None),
+):
+    actor_id, actor_role = _actor_defaults(x_actor_id, x_actor_role)
+    if actor_role not in {"ceo", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Only CEO or Super Admin can unlock departments.")
+    department = db.set_department_status(department_id, "active", actor_id=actor_id)
+    if not department:
+        raise HTTPException(status_code=404, detail="Department not found.")
+    return department
+
+
+@app.post("/departments/{department_id}/hide")
+def hide_department(
+    department_id: str,
+    x_actor_id: str | None = Header(default=None),
+    x_actor_role: str | None = Header(default=None),
+):
+    actor_id, actor_role = _actor_defaults(x_actor_id, x_actor_role)
+    if actor_role not in {"ceo", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Only CEO or Super Admin can hide departments.")
+    department = db.set_department_status(department_id, "hidden", actor_id=actor_id)
+    if not department:
+        raise HTTPException(status_code=404, detail="Department not found.")
+    return department
+
+
+@app.post("/departments/{department_id}/unhide")
+def unhide_department(
+    department_id: str,
+    x_actor_id: str | None = Header(default=None),
+    x_actor_role: str | None = Header(default=None),
+):
+    actor_id, actor_role = _actor_defaults(x_actor_id, x_actor_role)
+    if actor_role not in {"ceo", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Only CEO or Super Admin can unhide departments.")
+    department = db.set_department_status(department_id, "active", actor_id=actor_id)
+    if not department:
+        raise HTTPException(status_code=404, detail="Department not found.")
+    return department
+
+
+@app.delete("/departments/{department_id}")
+def delete_department(
+    department_id: str,
+    x_actor_id: str | None = Header(default=None),
+    x_actor_role: str | None = Header(default=None),
+):
+    actor_id, actor_role = _actor_defaults(x_actor_id, x_actor_role)
+    if actor_role != "ceo":
+        raise HTTPException(status_code=403, detail="Only CEO can delete departments.")
+    if db.count_active_store_assignments(department_id) > 0:
+        raise HTTPException(status_code=409, detail="Department has active store assignments. Migrate or disable them first.")
+    department = db.set_department_status(department_id, "deleted", actor_id=actor_id)
+    if not department:
+        raise HTTPException(status_code=404, detail="Department not found.")
+    return department
+
+
+@app.post("/departments/{department_id}/restore")
+def restore_department(
+    department_id: str,
+    x_actor_id: str | None = Header(default=None),
+    x_actor_role: str | None = Header(default=None),
+):
+    actor_id, actor_role = _actor_defaults(x_actor_id, x_actor_role)
+    if actor_role not in {"ceo", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Only CEO or Super Admin can restore departments.")
+    department = db.set_department_status(department_id, "active", actor_id=actor_id)
+    if not department:
+        raise HTTPException(status_code=404, detail="Department not found.")
+    return department
+
+
+@app.get("/departments/{department_id}/permissions")
+def get_department_permissions(department_id: str):
+    return db.list_department_permissions(department_id)
+
+
+@app.put("/departments/{department_id}/permissions")
+def update_department_permissions(
+    department_id: str,
+    body: DepartmentPermissionUpdate,
+    x_actor_id: str | None = Header(default=None),
+    x_actor_role: str | None = Header(default=None),
+):
+    actor_id, actor_role = _actor_defaults(x_actor_id, x_actor_role)
+    if actor_role not in {"ceo", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Only CEO or Super Admin can manage permissions.")
+    return db.set_department_permissions(
+        department_id,
+        [item.model_dump() for item in body.permissions],
+        actor_id=actor_id,
+    )
+
+
+@app.get("/stores/{store_id}/departments")
+def get_store_departments(store_id: str, x_actor_role: str | None = Header(default=None)):
+    _, actor_role = _actor_defaults(None, x_actor_role)
+    if store_id not in STORE_REGISTRY:
+        raise HTTPException(status_code=404, detail="Store not found.")
+    return db.list_store_departments(store_id, actor_role=actor_role)
+
+
+@app.put("/stores/{store_id}/departments")
+def update_store_departments(
+    store_id: str,
+    body: StoreDepartmentBulkUpdate,
+    x_actor_id: str | None = Header(default=None),
+    x_actor_role: str | None = Header(default=None),
+):
+    actor_id, actor_role = _actor_defaults(x_actor_id, x_actor_role)
+    if actor_role not in {"ceo", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Only CEO or Super Admin can assign departments to stores.")
+    if store_id not in STORE_REGISTRY:
+        raise HTTPException(status_code=404, detail="Store not found.")
+    return db.upsert_store_departments(
+        store_id,
+        [item.model_dump() for item in body.departments],
+        actor_id=actor_id,
+    )
+
+
+@app.put("/stores/{store_id}/departments/{department_id}/permissions")
+def update_store_department_permissions(
+    store_id: str,
+    department_id: str,
+    body: StoreDepartmentPermissionUpdate,
+    x_actor_id: str | None = Header(default=None),
+    x_actor_role: str | None = Header(default=None),
+):
+    actor_id, actor_role = _actor_defaults(x_actor_id, x_actor_role)
+    if actor_role not in {"ceo", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Only CEO or Super Admin can override store permissions.")
+    try:
+        return db.set_store_department_permissions(
+            store_id,
+            department_id,
+            [item.model_dump() for item in body.permissions],
+            actor_id=actor_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/policies")
+def list_policies(scope_type: str | None = None, target_type: str | None = None, is_active: bool | None = None):
+    return db.list_policies(scope_type=scope_type, target_type=target_type, is_active=is_active)
+
+
+@app.post("/policies")
+def create_policy(
+    body: PolicyUpsert,
+    x_actor_id: str | None = Header(default=None),
+    x_actor_role: str | None = Header(default=None),
+):
+    actor_id, actor_role = _actor_defaults(x_actor_id, x_actor_role)
+    if actor_role not in {"ceo", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Only CEO or Super Admin can create policies.")
+    try:
+        return db.create_policy(body.model_dump(), actor_id=actor_id)
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=400, detail=f"Policy create failed: {exc}") from exc
+
+
+@app.put("/policies/{policy_id}")
+def update_policy(
+    policy_id: str,
+    body: PolicyUpsert,
+    x_actor_id: str | None = Header(default=None),
+    x_actor_role: str | None = Header(default=None),
+):
+    actor_id, actor_role = _actor_defaults(x_actor_id, x_actor_role)
+    if actor_role not in {"ceo", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Only CEO or Super Admin can edit policies.")
+    policy = db.update_policy(policy_id, body.model_dump(), actor_id=actor_id)
+    if not policy:
+        raise HTTPException(status_code=404, detail="Policy not found.")
+    return policy
+
+
+@app.post("/policies/{policy_id}/activate")
+def activate_policy(policy_id: str, x_actor_id: str | None = Header(default=None), x_actor_role: str | None = Header(default=None)):
+    actor_id, actor_role = _actor_defaults(x_actor_id, x_actor_role)
+    if actor_role not in {"ceo", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Only CEO or Super Admin can activate policies.")
+    policy = db.set_policy_active(policy_id, True, actor_id=actor_id)
+    if not policy:
+        raise HTTPException(status_code=404, detail="Policy not found.")
+    return policy
+
+
+@app.post("/policies/{policy_id}/deactivate")
+def deactivate_policy(policy_id: str, x_actor_id: str | None = Header(default=None), x_actor_role: str | None = Header(default=None)):
+    actor_id, actor_role = _actor_defaults(x_actor_id, x_actor_role)
+    if actor_role not in {"ceo", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Only CEO or Super Admin can deactivate policies.")
+    policy = db.set_policy_active(policy_id, False, actor_id=actor_id)
+    if not policy:
+        raise HTTPException(status_code=404, detail="Policy not found.")
+    return policy
+
+
+@app.post("/policies/evaluate")
+def evaluate_policy(body: GovernanceEvaluateRequest):
+    return db.evaluate_governance_action(body.model_dump())
+
+
+@app.get("/audit-logs")
+def list_audit_logs(store_id: str | None = None, department_id: str | None = None, resource_type: str | None = None, limit: int = 100):
+    return db.list_audit_logs(store_id=store_id, department_id=department_id, resource_type=resource_type, limit=limit)
+
+
 # ══════════════════════════════════════════════════════════════════════
 # Projects — scans E:\Project\Master\ for real project data
 # ══════════════════════════════════════════════════════════════════════
@@ -451,6 +820,10 @@ STORE_REGISTRY = {
     "COPPER": {"name": "Copper Bowl", "address": "TBD", "brand": "copper"},
     "IFT": {"name": "International Food Truck", "address": "Mobile", "brand": "ift"},
 }
+
+
+def _actor_defaults(x_actor_id: str | None, x_actor_role: str | None) -> tuple[str, str]:
+    return (x_actor_id or "ceo"), (x_actor_role or "ceo").lower()
 
 
 def _git_info(project_path: Path) -> dict:

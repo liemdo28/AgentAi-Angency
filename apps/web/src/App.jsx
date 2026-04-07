@@ -8,6 +8,7 @@ import Goals from './pages/Goals';
 import Projects from './pages/Projects';
 import IntegrationOps from './pages/IntegrationOps';
 import Stores from './pages/Stores';
+import Departments from './pages/Departments';
 import OrgChart from './pages/OrgChart';
 import Costs from './pages/Costs';
 import Activity from './pages/Activity';
@@ -69,6 +70,7 @@ const Icon = ({ name }) => {
     projects: <svg className="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><rect x="2" y="2" width="12" height="12" rx="2" fill="none" stroke="currentColor" strokeWidth="1.3"/><path d="M2 6h12" stroke="currentColor" strokeWidth="1.3"/><circle cx="4.5" cy="4" r="0.8"/><circle cx="7" cy="4" r="0.8"/></svg>,
     pulse: <svg className="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M1 9h3l1.4-4 3.2 7 2-4H15" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round"/><circle cx="5.4" cy="5" r="0.8"/><circle cx="8.6" cy="12" r="0.8"/></svg>,
     stores: <svg className="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 6l1-4h10l1 4M2 6v8h12V6M4 14v-4h4v4M10 9h2v2h-2z" stroke="currentColor" strokeWidth="1.2" fill="none"/></svg>,
+    shield: <svg className="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l5 2v4c0 3.3-1.9 6-5 8-3.1-2-5-4.7-5-8V3l5-2z" stroke="currentColor" strokeWidth="1.2" fill="none"/><path d="M5.5 8l1.6 1.6L10.8 6" stroke="currentColor" strokeWidth="1.2" fill="none"/></svg>,
     settings: <svg className="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="2.5" fill="none" stroke="currentColor" strokeWidth="1.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.5 1.5M11.5 11.5L13 13M13 3l-1.5 1.5M4.5 11.5L3 13" stroke="currentColor" strokeWidth="1.2"/></svg>,
   };
   return icons[name] || null;
@@ -83,6 +85,7 @@ const PAGE_TITLES = {
   '/projects': 'Projects',
   '/integration-ops': 'Integration Ops',
   '/stores': 'Stores',
+  '/departments': 'Departments',
   '/org': 'Org Chart',
   '/costs': 'Costs',
   '/activity': 'Activity',
@@ -184,6 +187,7 @@ function AppShell() {
           <NavLink to="/projects"><Icon name="projects" /> Projects</NavLink>
           <NavLink to="/integration-ops"><Icon name="pulse" /> Integration Ops</NavLink>
           <NavLink to="/stores"><Icon name="stores" /> Stores</NavLink>
+          <NavLink to="/departments"><Icon name="shield" /> Departments</NavLink>
           <NavLink to="/org"><Icon name="org" /> Org Chart</NavLink>
           <NavLink to="/costs"><Icon name="costs" /> Costs</NavLink>
           <NavLink to="/activity"><Icon name="activity" /> Activity</NavLink>
@@ -211,6 +215,7 @@ function AppShell() {
           <Route path="/projects" element={<Projects />} />
           <Route path="/integration-ops" element={<IntegrationOps />} />
           <Route path="/stores" element={<Stores />} />
+          <Route path="/departments" element={<Departments />} />
           <Route path="/org" element={<OrgChart />} />
           <Route path="/costs" element={<Costs />} />
           <Route path="/activity" element={<Activity />} />

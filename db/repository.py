@@ -21,6 +21,128 @@ logger = logging.getLogger("db.control_plane")
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "agency.db"
 
+DEFAULT_DEPARTMENTS = [
+    {"code": "CEO_OFFICE", "name": "CEO Office", "category": "leadership", "description": "Company-wide executive control", "status": "active", "requires_ceo_visibility_only": 1, "execution_mode": "semi_auto"},
+    {"code": "OPERATIONS", "name": "Operations", "category": "core_business", "description": "Store execution, issue flow, and service operations", "status": "active", "execution_mode": "semi_auto"},
+    {"code": "MARKETING", "name": "Marketing", "category": "core_business", "description": "Campaign, content, promotion, and CRM operations", "status": "active", "execution_mode": "semi_auto"},
+    {"code": "SALES", "name": "Sales", "category": "core_business", "description": "Lead, pipeline, and conversion performance", "status": "active", "execution_mode": "suggest_only"},
+    {"code": "CUSTOMER_SUPPORT", "name": "Customer Support", "category": "core_business", "description": "Tickets, SLA, and customer communication", "status": "active", "execution_mode": "suggest_only"},
+    {"code": "FINANCE", "name": "Finance", "category": "core_business", "description": "Revenue, invoice, margin, and payout control", "status": "active", "execution_mode": "suggest_only"},
+    {"code": "HR", "name": "HR", "category": "core_business", "description": "People operations and employee records", "status": "locked", "execution_mode": "disabled"},
+    {"code": "DESIGN", "name": "Design", "category": "core_business", "description": "Creative assets, menu visuals, and brand design", "status": "active", "execution_mode": "suggest_only"},
+    {"code": "ENGINEERING_IT", "name": "Engineering / IT", "category": "core_business", "description": "Systems, source, deployment, and integrations", "status": "active", "execution_mode": "semi_auto"},
+    {"code": "DATA_ANALYTICS", "name": "Data / Analytics", "category": "core_business", "description": "Reporting, metrics, and data quality", "status": "active", "execution_mode": "semi_auto"},
+    {"code": "REVIEW_MANAGEMENT", "name": "Review Management", "category": "core_business", "description": "Google/Yelp review ops and reply workflows", "status": "active", "execution_mode": "semi_auto"},
+    {"code": "ADS_MEDIA", "name": "Ads / Media Buying", "category": "growth", "description": "Paid media management and budget optimization", "status": "active", "execution_mode": "suggest_only"},
+    {"code": "SEO_CONTENT", "name": "SEO / Content", "category": "growth", "description": "Organic growth, local SEO, and content production", "status": "active", "execution_mode": "suggest_only"},
+    {"code": "PROCUREMENT", "name": "Procurement / Purchasing", "category": "operations", "description": "Vendor sourcing and purchasing workflow", "status": "locked", "execution_mode": "disabled"},
+    {"code": "INVENTORY_SUPPLY", "name": "Inventory / Supply", "category": "operations", "description": "Supply planning and inventory controls", "status": "active", "execution_mode": "semi_auto"},
+    {"code": "COMPLIANCE_QA", "name": "Compliance / QA", "category": "operations", "description": "Audit, QA, and compliance checks", "status": "hidden", "requires_ceo_visibility_only": 1, "execution_mode": "suggest_only"},
+    {"code": "AI_AUTOMATION", "name": "AI Automation", "category": "system", "description": "Cross-functional AI automations and governance", "status": "active", "execution_mode": "semi_auto"},
+    {"code": "INTEGRATION_API", "name": "Integration / API", "category": "system", "description": "Integration pipelines and external service connectivity", "status": "active", "execution_mode": "semi_auto"},
+    {"code": "REPORTING_BI", "name": "Reporting / BI", "category": "system", "description": "BI delivery, scorecards, and scheduled reporting", "status": "active", "execution_mode": "semi_auto"},
+    {"code": "ADMIN_SUPER_ADMIN", "name": "Admin / Super Admin", "category": "system", "description": "Administrative control over the whole platform", "status": "active", "requires_ceo_visibility_only": 1, "execution_mode": "full_auto"},
+]
+
+DEFAULT_PERMISSIONS = [
+    ("create_department", "Create Department", "Department Admin", "create", "Create a new department"),
+    ("edit_department", "Edit Department", "Department Admin", "edit", "Update department metadata"),
+    ("delete_department", "Delete Department", "Department Admin", "delete", "Soft delete a department"),
+    ("hide_department", "Hide Department", "Department Admin", "hide", "Hide a department from standard visibility"),
+    ("lock_department", "Lock Department", "Department Admin", "lock", "Lock department execution and assignments"),
+    ("manage_store_assignment", "Manage Store Assignment", "Department Admin", "assign", "Assign departments to stores"),
+    ("manage_policies", "Manage Policies", "Policy Admin", "manage", "Create and update policy rules"),
+    ("view_audit_logs", "View Audit Logs", "Audit", "view", "Read governance audit logs"),
+    ("override_approval", "Override Approval", "Approval", "override", "Override an approval decision"),
+    ("manage_ai_agents", "Manage AI Agents", "AI Actions", "manage", "Change AI execution modes"),
+    ("reviews.read", "Read Reviews", "Reviews", "view", "Read review records"),
+    ("reviews.reply", "Reply to Reviews", "Reviews", "reply", "Create or publish review replies"),
+    ("reviews.export", "Export Reviews", "Reviews", "export", "Export review data"),
+    ("ads.read", "Read Ads", "Ads", "view", "Read ad accounts and campaigns"),
+    ("ads.create", "Create Ads", "Ads", "create", "Create ad campaigns"),
+    ("ads.edit", "Edit Ads", "Ads", "edit", "Edit ads and targeting"),
+    ("ads.pause", "Pause Ads", "Ads", "pause", "Pause or resume campaigns"),
+    ("finance.read", "Read Finance", "Finance", "view", "Read finance dashboards and reports"),
+    ("invoices.export", "Export Invoices", "Finance", "export", "Export invoice and payout data"),
+    ("staff.read", "Read Staff", "HR", "view", "Read HR and staff records"),
+    ("staff.write", "Write Staff", "HR", "edit", "Update staff records"),
+    ("menu.read", "Read Menu", "Store Ops", "view", "Read menu or operational data"),
+    ("menu.write", "Write Menu", "Store Ops", "edit", "Update menu or operational data"),
+    ("analytics.read", "Read Analytics", "Analytics", "view", "Read analytics dashboards"),
+    ("analytics.export", "Export Analytics", "Analytics", "export", "Export analytics results"),
+    ("campaigns.publish", "Publish Campaigns", "Marketing", "publish", "Publish campaigns or content live"),
+    ("tasks.assign", "Assign Tasks", "Operations", "assign", "Assign work items"),
+    ("policy.simulate", "Simulate Policy", "Policy Admin", "simulate", "Run dry-run policy evaluation"),
+]
+
+DEFAULT_POLICIES = [
+    {
+        "policy_code": "POLICY_001_REVIEW_LOW_RATING",
+        "policy_name": "Negative review approval",
+        "scope_type": "department",
+        "target_type": "department_code",
+        "target_id": "REVIEW_MANAGEMENT",
+        "condition_json": {"all": [{"field": "action", "op": "eq", "value": "reviews.reply.publish"}, {"field": "rating", "op": "lte", "value": 3}]},
+        "effect": "require_approval",
+        "approval_chain_json": ["store_manager"],
+        "escalation_json": {"target": "store_manager"},
+        "audit_required": 1,
+        "priority": 40,
+    },
+    {
+        "policy_code": "POLICY_002_REVIEW_HIGH_RATING",
+        "policy_name": "Positive review auto execute",
+        "scope_type": "department",
+        "target_type": "department_code",
+        "target_id": "REVIEW_MANAGEMENT",
+        "condition_json": {"all": [{"field": "action", "op": "eq", "value": "reviews.reply.publish"}, {"field": "rating", "op": "gte", "value": 4}]},
+        "effect": "auto_execute",
+        "approval_chain_json": [],
+        "escalation_json": {},
+        "audit_required": 1,
+        "priority": 50,
+    },
+    {
+        "policy_code": "POLICY_003_HIDDEN_DEPARTMENT_VISIBILITY",
+        "policy_name": "Hidden department CEO visibility",
+        "scope_type": "company",
+        "target_type": "visibility",
+        "target_id": "department.hidden",
+        "condition_json": {"all": [{"field": "department_status", "op": "eq", "value": "hidden"}]},
+        "effect": "ceo_only_visibility",
+        "approval_chain_json": [],
+        "escalation_json": {},
+        "audit_required": 1,
+        "priority": 20,
+    },
+    {
+        "policy_code": "POLICY_004_LOCKED_DEPARTMENT_EXECUTION",
+        "policy_name": "Locked department deny execution",
+        "scope_type": "company",
+        "target_type": "execution",
+        "target_id": "department.locked",
+        "condition_json": {"all": [{"field": "department_status", "op": "eq", "value": "locked"}]},
+        "effect": "deny",
+        "approval_chain_json": [],
+        "escalation_json": {},
+        "audit_required": 1,
+        "priority": 10,
+    },
+    {
+        "policy_code": "POLICY_005_DEPARTMENT_DELETE_PROTECTION",
+        "policy_name": "Department delete requires CEO approval",
+        "scope_type": "action",
+        "target_type": "action",
+        "target_id": "department.delete",
+        "condition_json": {"all": [{"field": "action", "op": "eq", "value": "department.delete"}]},
+        "effect": "require_ceo_approval",
+        "approval_chain_json": ["ceo"],
+        "escalation_json": {"target": "ceo"},
+        "audit_required": 1,
+        "priority": 5,
+    },
+]
+
 
 class ControlPlaneDB:
     """Thin repository over the control-plane tables."""
@@ -44,6 +166,7 @@ class ControlPlaneDB:
         try:
             conn.executescript(CONTROL_PLANE_SCHEMA)
             self._ensure_edge_command_columns(conn)
+            self._seed_governance_defaults(conn)
             conn.commit()
             logger.info("Control plane schema ready (%s)", self.db_path)
         finally:
@@ -92,6 +215,261 @@ class ControlPlaneDB:
                 ON cp_edge_commands(project_id, machine_id, lease_expires_at)
             """
         )
+
+    def _now(self) -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def _decode_json_list(self, value: str | None) -> list:
+        try:
+            parsed = json.loads(value or "[]")
+            return parsed if isinstance(parsed, list) else []
+        except json.JSONDecodeError:
+            return []
+
+    def _bool(self, value: Any) -> bool:
+        return bool(int(value)) if isinstance(value, (int, bool)) else str(value).lower() in {"1", "true", "yes"}
+
+    def _seed_governance_defaults(self, conn: sqlite3.Connection) -> None:
+        now = self._now()
+        for code, name, module, action, description in DEFAULT_PERMISSIONS:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO cp_permissions (
+                    id, permission_key, permission_name, module, action, description, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (str(uuid4()), code, name, module, action, description, now),
+            )
+
+        for item in DEFAULT_DEPARTMENTS:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO cp_departments (
+                    id, code, name, description, category, status, is_system_default,
+                    allow_store_assignment, allow_ai_agent_execution, allow_human_assignment,
+                    requires_ceo_visibility_only, execution_mode, created_at, created_by, updated_at, updated_by
+                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 'system', ?, 'system')
+                """,
+                (
+                    str(uuid4()),
+                    item["code"],
+                    item["name"],
+                    item.get("description", ""),
+                    item.get("category", "general"),
+                    item.get("status", "active"),
+                    item.get("allow_store_assignment", 1),
+                    item.get("allow_ai_agent_execution", 1),
+                    item.get("allow_human_assignment", 1),
+                    item.get("requires_ceo_visibility_only", 0),
+                    item.get("execution_mode", "suggest_only"),
+                    now,
+                    now,
+                ),
+            )
+
+        for item in DEFAULT_POLICIES:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO cp_policies (
+                    id, policy_code, policy_name, scope_type, target_type, target_id,
+                    condition_json, effect, approval_chain_json, escalation_json,
+                    audit_required, priority, is_active, created_by, updated_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'system', 'system', ?, ?)
+                """,
+                (
+                    str(uuid4()),
+                    item["policy_code"],
+                    item["policy_name"],
+                    item["scope_type"],
+                    item["target_type"],
+                    item["target_id"],
+                    json.dumps(item.get("condition_json") or {}, ensure_ascii=False),
+                    item["effect"],
+                    json.dumps(item.get("approval_chain_json") or [], ensure_ascii=False),
+                    json.dumps(item.get("escalation_json") or {}, ensure_ascii=False),
+                    item.get("audit_required", 1),
+                    item.get("priority", 100),
+                    now,
+                    now,
+                ),
+            )
+
+    def _hydrate_department(self, row: sqlite3.Row | None) -> Optional[dict]:
+        if not row:
+            return None
+        item = dict(row)
+        for key in (
+            "is_system_default",
+            "allow_store_assignment",
+            "allow_ai_agent_execution",
+            "allow_human_assignment",
+            "requires_ceo_visibility_only",
+        ):
+            item[key] = self._bool(item.get(key))
+        item["is_active"] = item.get("status") == "active"
+        item["is_locked"] = item.get("status") == "locked"
+        item["is_hidden"] = item.get("status") == "hidden"
+        item["is_deleted"] = item.get("status") == "deleted"
+        return item
+
+    def _hydrate_permission(self, row: sqlite3.Row | None) -> Optional[dict]:
+        if not row:
+            return None
+        return dict(row)
+
+    def _hydrate_policy(self, row: sqlite3.Row | None) -> Optional[dict]:
+        if not row:
+            return None
+        item = dict(row)
+        item["condition"] = self._decode_json(item.get("condition_json"))
+        item["approval_chain"] = self._decode_json_list(item.get("approval_chain_json"))
+        item["escalation"] = self._decode_json(item.get("escalation_json"))
+        item["audit_required"] = self._bool(item.get("audit_required"))
+        item["is_active"] = self._bool(item.get("is_active"))
+        return item
+
+    def _hydrate_audit_log(self, row: sqlite3.Row | None) -> Optional[dict]:
+        if not row:
+            return None
+        item = dict(row)
+        item["before"] = self._decode_json(item.get("before_json"))
+        item["after"] = self._decode_json(item.get("after_json"))
+        return item
+
+    def _department_permission_map(self, conn: sqlite3.Connection, department_id: str) -> dict[str, bool]:
+        rows = conn.execute(
+            """
+            SELECT p.permission_key, dp.allowed
+            FROM cp_department_permissions dp
+            JOIN cp_permissions p ON p.id = dp.permission_id
+            WHERE dp.department_id = ?
+            """,
+            (department_id,),
+        ).fetchall()
+        return {row["permission_key"]: self._bool(row["allowed"]) for row in rows}
+
+    def _store_department_assignment(self, conn: sqlite3.Connection, store_id: str, department_id: str) -> Optional[dict]:
+        row = conn.execute(
+            "SELECT * FROM cp_store_departments WHERE store_id = ? AND department_id = ?",
+            (store_id, department_id),
+        ).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        for key in ("enabled", "locked", "hidden", "deleted", "custom_policy_enabled"):
+            item[key] = self._bool(item.get(key))
+        return item
+
+    def _store_permission_overrides(self, conn: sqlite3.Connection, store_department_id: str) -> dict[str, bool]:
+        rows = conn.execute(
+            """
+            SELECT p.permission_key, sdp.allowed
+            FROM cp_store_department_permissions sdp
+            JOIN cp_permissions p ON p.id = sdp.permission_id
+            WHERE sdp.store_department_id = ?
+            """,
+            (store_department_id,),
+        ).fetchall()
+        return {row["permission_key"]: self._bool(row["allowed"]) for row in rows}
+
+    def _effective_permission(self, conn: sqlite3.Connection, department_id: str, permission_key: str, store_id: str | None = None) -> bool:
+        base = self._department_permission_map(conn, department_id).get(permission_key, False)
+        if not store_id:
+            return base
+        assignment = self._store_department_assignment(conn, store_id, department_id)
+        if not assignment:
+            return base
+        overrides = self._store_permission_overrides(conn, assignment["id"])
+        if permission_key in overrides:
+            return overrides[permission_key]
+        return base
+
+    def _match_condition(self, context: dict, condition: dict | list | None) -> bool:
+        if not condition:
+            return True
+        if isinstance(condition, list):
+            return all(self._match_condition(context, item) for item in condition)
+        if "all" in condition:
+            return all(self._match_condition(context, item) for item in condition.get("all", []))
+        if "any" in condition:
+            return any(self._match_condition(context, item) for item in condition.get("any", []))
+        field = condition.get("field")
+        op = condition.get("op", "eq")
+        expected = condition.get("value")
+        actual = context.get(field)
+        if op == "eq":
+            return actual == expected
+        if op == "neq":
+            return actual != expected
+        if op == "lte":
+            return actual is not None and actual <= expected
+        if op == "gte":
+            return actual is not None and actual >= expected
+        if op == "lt":
+            return actual is not None and actual < expected
+        if op == "gt":
+            return actual is not None and actual > expected
+        if op == "in":
+            return actual in (expected or [])
+        if op == "contains":
+            return actual is not None and expected in actual
+        return False
+
+    def _log_audit(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        actor_type: str,
+        actor_id: str,
+        action: str,
+        resource_type: str,
+        resource_id: str,
+        before: dict | None = None,
+        after: dict | None = None,
+        status: str = "success",
+        reason: str = "",
+        store_id: str | None = None,
+        department_id: str | None = None,
+    ) -> dict:
+        audit = {
+            "id": str(uuid4()),
+            "actor_type": actor_type,
+            "actor_id": actor_id,
+            "action": action,
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "before_json": json.dumps(before or {}, ensure_ascii=False),
+            "after_json": json.dumps(after or {}, ensure_ascii=False),
+            "status": status,
+            "reason": reason,
+            "store_id": store_id,
+            "department_id": department_id,
+            "created_at": self._now(),
+        }
+        conn.execute(
+            """
+            INSERT INTO cp_audit_logs (
+                id, actor_type, actor_id, action, resource_type, resource_id, before_json, after_json,
+                status, reason, store_id, department_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                audit["id"],
+                audit["actor_type"],
+                audit["actor_id"],
+                audit["action"],
+                audit["resource_type"],
+                audit["resource_id"],
+                audit["before_json"],
+                audit["after_json"],
+                audit["status"],
+                audit["reason"],
+                audit["store_id"],
+                audit["department_id"],
+                audit["created_at"],
+            ),
+        )
+        return audit
 
     def _upsert_edge_machine(
         self,
@@ -904,6 +1282,739 @@ class ControlPlaneDB:
                 )
             conn.commit()
             return self._hydrate_edge_command(row)
+        finally:
+            conn.close()
+
+    # ── department governance ───────────────────────────────────────
+
+    def list_permissions(self, module: str | None = None) -> List[dict]:
+        conn = self._conn()
+        try:
+            if module:
+                rows = conn.execute(
+                    "SELECT * FROM cp_permissions WHERE module = ? ORDER BY module, permission_key",
+                    (module,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM cp_permissions ORDER BY module, permission_key"
+                ).fetchall()
+            return [item for item in (self._hydrate_permission(row) for row in rows) if item]
+        finally:
+            conn.close()
+
+    def list_departments(
+        self,
+        *,
+        status: str | None = None,
+        visibility: str | None = None,
+        search: str | None = None,
+        category: str | None = None,
+        actor_role: str = "ceo",
+    ) -> List[dict]:
+        conditions = []
+        params: list[Any] = []
+        if status:
+            conditions.append("status = ?")
+            params.append(status)
+        if category:
+            conditions.append("category = ?")
+            params.append(category)
+        if search:
+            conditions.append("(name LIKE ? OR code LIKE ? OR description LIKE ?)")
+            like = f"%{search}%"
+            params.extend([like, like, like])
+        if visibility == "hidden":
+            conditions.append("status = 'hidden'")
+        elif visibility == "public":
+            conditions.append("status != 'hidden'")
+        if actor_role not in {"ceo", "super_admin"}:
+            conditions.extend([
+                "requires_ceo_visibility_only = 0",
+                "status != 'hidden'",
+                "status != 'deleted'",
+            ])
+        sql = "SELECT * FROM cp_departments"
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
+        sql += " ORDER BY CASE status WHEN 'active' THEN 1 WHEN 'locked' THEN 2 WHEN 'hidden' THEN 3 WHEN 'deleted' THEN 4 ELSE 5 END, name ASC"
+
+        conn = self._conn()
+        try:
+            rows = conn.execute(sql, params).fetchall()
+            results = []
+            for row in rows:
+                item = self._hydrate_department(row)
+                if not item:
+                    continue
+                item["assigned_stores_count"] = conn.execute(
+                    "SELECT COUNT(*) AS c FROM cp_store_departments WHERE department_id = ? AND deleted = 0",
+                    (item["id"],),
+                ).fetchone()["c"]
+                results.append(item)
+            return results
+        finally:
+            conn.close()
+
+    def get_department(self, department_id: str, *, actor_role: str = "ceo") -> Optional[dict]:
+        conn = self._conn()
+        try:
+            row = conn.execute("SELECT * FROM cp_departments WHERE id = ?", (department_id,)).fetchone()
+            item = self._hydrate_department(row)
+            if not item:
+                return None
+            if item["requires_ceo_visibility_only"] and actor_role not in {"ceo", "super_admin"}:
+                return None
+            item["permissions"] = self.list_department_permissions(department_id)
+            item["assigned_stores_count"] = conn.execute(
+                "SELECT COUNT(*) AS c FROM cp_store_departments WHERE department_id = ? AND deleted = 0",
+                (department_id,),
+            ).fetchone()["c"]
+            return item
+        finally:
+            conn.close()
+
+    def count_active_store_assignments(self, department_id: str) -> int:
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM cp_store_departments
+                WHERE department_id = ? AND enabled = 1 AND deleted = 0
+                """,
+                (department_id,),
+            ).fetchone()
+            return row["c"] if row else 0
+        finally:
+            conn.close()
+
+    def create_department(self, payload: dict, *, actor_id: str = "ceo", actor_type: str = "human") -> dict:
+        now = self._now()
+        department_id = str(uuid4())
+        status = payload.get("status", "active")
+        conn = self._conn()
+        try:
+            conn.execute(
+                """
+                INSERT INTO cp_departments (
+                    id, code, name, description, category, status, is_system_default,
+                    allow_store_assignment, allow_ai_agent_execution, allow_human_assignment,
+                    requires_ceo_visibility_only, execution_mode, parent_department_id,
+                    created_at, created_by, updated_at, updated_by
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    department_id,
+                    payload["code"].strip().upper(),
+                    payload["name"].strip(),
+                    payload.get("description", "").strip(),
+                    payload.get("category", "general"),
+                    status,
+                    int(bool(payload.get("allow_store_assignment", True))),
+                    int(bool(payload.get("allow_ai_agent_execution", True))),
+                    int(bool(payload.get("allow_human_assignment", True))),
+                    int(bool(payload.get("requires_ceo_visibility_only", status == "hidden"))),
+                    payload.get("execution_mode", "suggest_only"),
+                    payload.get("parent_department_id"),
+                    now,
+                    actor_id,
+                    now,
+                    actor_id,
+                ),
+            )
+            self._log_audit(
+                conn,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                action="department.create",
+                resource_type="department",
+                resource_id=department_id,
+                after={"code": payload["code"].strip().upper(), "name": payload["name"].strip(), "status": status},
+                department_id=department_id,
+            )
+            conn.commit()
+            return self.get_department(department_id) or {"id": department_id}
+        finally:
+            conn.close()
+
+    def update_department(self, department_id: str, payload: dict, *, actor_id: str = "ceo", actor_type: str = "human") -> Optional[dict]:
+        conn = self._conn()
+        try:
+            before = self.get_department(department_id)
+            if not before:
+                return None
+            status = payload.get("status", before["status"])
+            deleted_at = self._now() if status == "deleted" and not before.get("deleted_at") else None
+            conn.execute(
+                """
+                UPDATE cp_departments
+                SET code = ?, name = ?, description = ?, category = ?, status = ?,
+                    allow_store_assignment = ?, allow_ai_agent_execution = ?, allow_human_assignment = ?,
+                    requires_ceo_visibility_only = ?, execution_mode = ?, parent_department_id = ?,
+                    updated_at = ?, updated_by = ?,
+                    deleted_at = CASE WHEN ? = 'deleted' THEN COALESCE(deleted_at, ?) WHEN ? != 'deleted' THEN NULL ELSE deleted_at END,
+                    deleted_by = CASE WHEN ? = 'deleted' THEN ? WHEN ? != 'deleted' THEN NULL ELSE deleted_by END
+                WHERE id = ?
+                """,
+                (
+                    payload.get("code", before["code"]).strip().upper(),
+                    payload.get("name", before["name"]).strip(),
+                    payload.get("description", before.get("description", "")).strip(),
+                    payload.get("category", before.get("category", "general")),
+                    status,
+                    int(bool(payload.get("allow_store_assignment", before["allow_store_assignment"]))),
+                    int(bool(payload.get("allow_ai_agent_execution", before["allow_ai_agent_execution"]))),
+                    int(bool(payload.get("allow_human_assignment", before["allow_human_assignment"]))),
+                    int(bool(payload.get("requires_ceo_visibility_only", before["requires_ceo_visibility_only"] or status == "hidden"))),
+                    payload.get("execution_mode", before.get("execution_mode", "suggest_only")),
+                    payload.get("parent_department_id", before.get("parent_department_id")),
+                    self._now(),
+                    actor_id,
+                    status,
+                    deleted_at,
+                    status,
+                    status,
+                    actor_id,
+                    status,
+                    department_id,
+                ),
+            )
+            conn.commit()
+            after = self.get_department(department_id)
+            self._log_audit(
+                conn,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                action="department.update",
+                resource_type="department",
+                resource_id=department_id,
+                before=before,
+                after=after,
+                department_id=department_id,
+            )
+            conn.commit()
+            return after
+        finally:
+            conn.close()
+
+    def set_department_status(self, department_id: str, status: str, *, actor_id: str = "ceo", actor_type: str = "human") -> Optional[dict]:
+        current = self.get_department(department_id)
+        if not current:
+            return None
+        return self.update_department(
+            department_id,
+            {
+                "code": current["code"],
+                "name": current["name"],
+                "description": current.get("description", ""),
+                "category": current.get("category", "general"),
+                "status": status,
+                "allow_store_assignment": current["allow_store_assignment"],
+                "allow_ai_agent_execution": current["allow_ai_agent_execution"],
+                "allow_human_assignment": current["allow_human_assignment"],
+                "requires_ceo_visibility_only": current["requires_ceo_visibility_only"] or status == "hidden",
+                "execution_mode": current.get("execution_mode", "suggest_only"),
+                "parent_department_id": current.get("parent_department_id"),
+            },
+            actor_id=actor_id,
+            actor_type=actor_type,
+        )
+
+    def list_department_permissions(self, department_id: str) -> List[dict]:
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                """
+                SELECT p.*, COALESCE(dp.allowed, 0) AS allowed
+                FROM cp_permissions p
+                LEFT JOIN cp_department_permissions dp
+                    ON dp.permission_id = p.id AND dp.department_id = ?
+                ORDER BY p.module ASC, p.permission_key ASC
+                """,
+                (department_id,),
+            ).fetchall()
+            results = []
+            for row in rows:
+                item = dict(row)
+                item["allowed"] = self._bool(item.get("allowed"))
+                results.append(item)
+            return results
+        finally:
+            conn.close()
+
+    def set_department_permissions(self, department_id: str, permissions: list[dict], *, actor_id: str = "ceo", actor_type: str = "human") -> List[dict]:
+        now = self._now()
+        conn = self._conn()
+        try:
+            before = self.list_department_permissions(department_id)
+            permission_map = {
+                row["permission_key"]: row["id"]
+                for row in conn.execute("SELECT id, permission_key FROM cp_permissions").fetchall()
+            }
+            for item in permissions:
+                permission_id = permission_map.get(item["key"])
+                if not permission_id:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO cp_department_permissions (id, department_id, permission_id, allowed, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(department_id, permission_id) DO UPDATE SET
+                        allowed = excluded.allowed,
+                        updated_at = excluded.updated_at
+                    """,
+                    (str(uuid4()), department_id, permission_id, int(bool(item.get("allowed"))), now, now),
+                )
+            conn.commit()
+            after = self.list_department_permissions(department_id)
+            self._log_audit(
+                conn,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                action="department.permissions.update",
+                resource_type="department_permission",
+                resource_id=department_id,
+                before={"permissions": before},
+                after={"permissions": after},
+                department_id=department_id,
+            )
+            conn.commit()
+            return after
+        finally:
+            conn.close()
+
+    def list_store_departments(self, store_id: str, *, actor_role: str = "ceo") -> List[dict]:
+        departments = self.list_departments(actor_role=actor_role)
+        conn = self._conn()
+        try:
+            rows = []
+            for department in departments:
+                assignment = self._store_department_assignment(conn, store_id, department["id"])
+                rows.append(
+                    {
+                        "store_id": store_id,
+                        "department_id": department["id"],
+                        "department_code": department["code"],
+                        "department_name": department["name"],
+                        "status": department["status"],
+                        "enabled": assignment["enabled"] if assignment else False,
+                        "locked": assignment["locked"] if assignment else department["status"] == "locked",
+                        "hidden": assignment["hidden"] if assignment else department["status"] == "hidden",
+                        "deleted": assignment["deleted"] if assignment else department["status"] == "deleted",
+                        "custom_policy_enabled": assignment["custom_policy_enabled"] if assignment else False,
+                        "execution_mode": assignment["execution_mode"] if assignment and assignment.get("execution_mode") else department.get("execution_mode", "suggest_only"),
+                        "custom_permissions_count": len(self._store_permission_overrides(conn, assignment["id"])) if assignment else 0,
+                    }
+                )
+            return rows
+        finally:
+            conn.close()
+
+    def upsert_store_departments(self, store_id: str, departments: list[dict], *, actor_id: str = "ceo", actor_type: str = "human") -> List[dict]:
+        conn = self._conn()
+        try:
+            dept_lookup = {
+                row["id"]: self._hydrate_department(row)
+                for row in conn.execute("SELECT * FROM cp_departments").fetchall()
+            }
+            for item in departments:
+                department = dept_lookup.get(item["department_id"])
+                if not department or department["status"] == "deleted":
+                    continue
+                if department["status"] == "locked" and item.get("enabled", True):
+                    item["locked"] = True
+                now = self._now()
+                conn.execute(
+                    """
+                    INSERT INTO cp_store_departments (
+                        id, store_id, department_id, enabled, locked, hidden, deleted,
+                        custom_policy_enabled, execution_mode, created_at, updated_at, created_by, updated_by
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(store_id, department_id) DO UPDATE SET
+                        enabled = excluded.enabled,
+                        locked = excluded.locked,
+                        hidden = excluded.hidden,
+                        deleted = excluded.deleted,
+                        custom_policy_enabled = excluded.custom_policy_enabled,
+                        execution_mode = excluded.execution_mode,
+                        updated_at = excluded.updated_at,
+                        updated_by = excluded.updated_by
+                    """,
+                    (
+                        str(uuid4()),
+                        store_id,
+                        department["id"],
+                        int(bool(item.get("enabled"))),
+                        int(bool(item.get("locked", False))),
+                        int(bool(item.get("hidden", False))),
+                        int(bool(item.get("deleted", False))),
+                        int(bool(item.get("custom_policy_enabled", False))),
+                        item.get("execution_mode"),
+                        now,
+                        now,
+                        actor_id,
+                        actor_id,
+                    ),
+                )
+            self._log_audit(
+                conn,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                action="store.departments.update",
+                resource_type="store_department",
+                resource_id=store_id,
+                after={"departments": departments},
+                store_id=store_id,
+            )
+            conn.commit()
+            return self.list_store_departments(store_id)
+        finally:
+            conn.close()
+
+    def set_store_department_permissions(
+        self,
+        store_id: str,
+        department_id: str,
+        permissions: list[dict],
+        *,
+        actor_id: str = "ceo",
+        actor_type: str = "human",
+    ) -> dict:
+        now = self._now()
+        conn = self._conn()
+        try:
+            assignment = self._store_department_assignment(conn, store_id, department_id)
+            if not assignment:
+                raise ValueError("Store department assignment not found.")
+            permission_map = {
+                row["permission_key"]: row["id"]
+                for row in conn.execute("SELECT id, permission_key FROM cp_permissions").fetchall()
+            }
+            before = self._store_permission_overrides(conn, assignment["id"])
+            for item in permissions:
+                permission_id = permission_map.get(item["key"])
+                if not permission_id:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO cp_store_department_permissions (
+                        id, store_department_id, permission_id, allowed, source, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(store_department_id, permission_id) DO UPDATE SET
+                        allowed = excluded.allowed,
+                        source = excluded.source,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        str(uuid4()),
+                        assignment["id"],
+                        permission_id,
+                        int(bool(item.get("allowed"))),
+                        item.get("source", "override"),
+                        now,
+                        now,
+                    ),
+                )
+            after = self._store_permission_overrides(conn, assignment["id"])
+            self._log_audit(
+                conn,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                action="store.department.permissions.update",
+                resource_type="store_department_permission",
+                resource_id=assignment["id"],
+                before=before,
+                after=after,
+                store_id=store_id,
+                department_id=department_id,
+            )
+            conn.commit()
+            return {"store_id": store_id, "department_id": department_id, "permissions": after}
+        finally:
+            conn.close()
+
+    def list_policies(
+        self,
+        *,
+        scope_type: str | None = None,
+        target_type: str | None = None,
+        is_active: bool | None = None,
+    ) -> List[dict]:
+        conditions = []
+        params: list[Any] = []
+        if scope_type:
+            conditions.append("scope_type = ?")
+            params.append(scope_type)
+        if target_type:
+            conditions.append("target_type = ?")
+            params.append(target_type)
+        if is_active is not None:
+            conditions.append("is_active = ?")
+            params.append(int(bool(is_active)))
+        sql = "SELECT * FROM cp_policies"
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
+        sql += " ORDER BY priority ASC, created_at DESC"
+        conn = self._conn()
+        try:
+            rows = conn.execute(sql, params).fetchall()
+            return [item for item in (self._hydrate_policy(row) for row in rows) if item]
+        finally:
+            conn.close()
+
+    def get_policy(self, policy_id: str) -> Optional[dict]:
+        conn = self._conn()
+        try:
+            row = conn.execute("SELECT * FROM cp_policies WHERE id = ?", (policy_id,)).fetchone()
+            return self._hydrate_policy(row)
+        finally:
+            conn.close()
+
+    def create_policy(self, payload: dict, *, actor_id: str = "ceo", actor_type: str = "human") -> dict:
+        now = self._now()
+        policy_id = str(uuid4())
+        conn = self._conn()
+        try:
+            conn.execute(
+                """
+                INSERT INTO cp_policies (
+                    id, policy_code, policy_name, scope_type, target_type, target_id,
+                    condition_json, effect, approval_chain_json, escalation_json,
+                    audit_required, priority, is_active, effective_from, effective_to,
+                    created_by, updated_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    policy_id,
+                    payload["policy_code"].strip().upper(),
+                    payload["policy_name"].strip(),
+                    payload["scope_type"],
+                    payload["target_type"],
+                    str(payload["target_id"]),
+                    json.dumps(payload.get("condition_json") or {}, ensure_ascii=False),
+                    payload["effect"],
+                    json.dumps(payload.get("approval_chain_json") or [], ensure_ascii=False),
+                    json.dumps(payload.get("escalation_json") or {}, ensure_ascii=False),
+                    int(bool(payload.get("audit_required", True))),
+                    int(payload.get("priority", 100)),
+                    int(bool(payload.get("is_active", True))),
+                    payload.get("effective_from"),
+                    payload.get("effective_to"),
+                    actor_id,
+                    actor_id,
+                    now,
+                    now,
+                ),
+            )
+            self._log_audit(
+                conn,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                action="policy.create",
+                resource_type="policy",
+                resource_id=policy_id,
+                after={"policy_code": payload["policy_code"].strip().upper(), "effect": payload["effect"]},
+            )
+            conn.commit()
+            return self.get_policy(policy_id) or {"id": policy_id}
+        finally:
+            conn.close()
+
+    def update_policy(self, policy_id: str, payload: dict, *, actor_id: str = "ceo", actor_type: str = "human") -> Optional[dict]:
+        conn = self._conn()
+        try:
+            before = self.get_policy(policy_id)
+            if not before:
+                return None
+            conn.execute(
+                """
+                UPDATE cp_policies
+                SET policy_code = ?, policy_name = ?, scope_type = ?, target_type = ?, target_id = ?,
+                    condition_json = ?, effect = ?, approval_chain_json = ?, escalation_json = ?,
+                    audit_required = ?, priority = ?, is_active = ?, effective_from = ?, effective_to = ?,
+                    updated_by = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    payload.get("policy_code", before["policy_code"]).strip().upper(),
+                    payload.get("policy_name", before["policy_name"]).strip(),
+                    payload.get("scope_type", before["scope_type"]),
+                    payload.get("target_type", before["target_type"]),
+                    str(payload.get("target_id", before["target_id"])),
+                    json.dumps(payload.get("condition_json", before.get("condition")) or {}, ensure_ascii=False),
+                    payload.get("effect", before["effect"]),
+                    json.dumps(payload.get("approval_chain_json", before.get("approval_chain")) or [], ensure_ascii=False),
+                    json.dumps(payload.get("escalation_json", before.get("escalation")) or {}, ensure_ascii=False),
+                    int(bool(payload.get("audit_required", before["audit_required"]))),
+                    int(payload.get("priority", before["priority"])),
+                    int(bool(payload.get("is_active", before["is_active"]))),
+                    payload.get("effective_from", before.get("effective_from")),
+                    payload.get("effective_to", before.get("effective_to")),
+                    actor_id,
+                    self._now(),
+                    policy_id,
+                ),
+            )
+            conn.commit()
+            after = self.get_policy(policy_id)
+            self._log_audit(
+                conn,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                action="policy.update",
+                resource_type="policy",
+                resource_id=policy_id,
+                before=before,
+                after=after,
+            )
+            conn.commit()
+            return after
+        finally:
+            conn.close()
+
+    def set_policy_active(self, policy_id: str, is_active: bool, *, actor_id: str = "ceo", actor_type: str = "human") -> Optional[dict]:
+        return self.update_policy(policy_id, {"is_active": is_active}, actor_id=actor_id, actor_type=actor_type)
+
+    def list_audit_logs(
+        self,
+        *,
+        store_id: str | None = None,
+        department_id: str | None = None,
+        resource_type: str | None = None,
+        limit: int = 100,
+    ) -> List[dict]:
+        conditions = []
+        params: list[Any] = []
+        if store_id:
+            conditions.append("store_id = ?")
+            params.append(store_id)
+        if department_id:
+            conditions.append("department_id = ?")
+            params.append(department_id)
+        if resource_type:
+            conditions.append("resource_type = ?")
+            params.append(resource_type)
+        sql = "SELECT * FROM cp_audit_logs"
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        conn = self._conn()
+        try:
+            rows = conn.execute(sql, params).fetchall()
+            return [item for item in (self._hydrate_audit_log(row) for row in rows) if item]
+        finally:
+            conn.close()
+
+    def evaluate_governance_action(self, payload: dict) -> dict:
+        actor_role = (payload.get("actor_role") or "").lower()
+        store_id = payload.get("store_id")
+        department_id = payload.get("department_id")
+        permission_key = payload.get("permission_key")
+        action_name = payload.get("action")
+        context = payload.get("context") or {}
+        conn = self._conn()
+        try:
+            department = self.get_department(department_id, actor_role=actor_role or "ceo")
+            if not department:
+                return {"allowed": False, "decision": "deny", "reason": "department_not_found", "matched_policy": None, "escalation": None}
+            if department["status"] == "deleted":
+                return {"allowed": False, "decision": "deny", "reason": "department_deleted", "matched_policy": None, "escalation": None}
+            if department["status"] == "hidden" and actor_role not in {"ceo", "super_admin"}:
+                return {"allowed": False, "decision": "deny", "reason": "department_hidden", "matched_policy": "POLICY_003_HIDDEN_DEPARTMENT_VISIBILITY", "escalation": "ceo"}
+            if department["status"] == "locked":
+                return {"allowed": False, "decision": "deny", "reason": "department_locked", "matched_policy": "POLICY_004_LOCKED_DEPARTMENT_EXECUTION", "escalation": None}
+
+            assignment = self._store_department_assignment(conn, store_id, department_id) if store_id else None
+            if store_id and (not assignment or not assignment.get("enabled") or assignment.get("deleted")):
+                return {"allowed": False, "decision": "deny", "reason": "store_department_not_enabled", "matched_policy": None, "escalation": None}
+            if assignment and assignment.get("locked"):
+                return {"allowed": False, "decision": "deny", "reason": "store_department_locked", "matched_policy": None, "escalation": None}
+            if assignment and assignment.get("hidden") and actor_role not in {"ceo", "super_admin"}:
+                return {"allowed": False, "decision": "deny", "reason": "store_department_hidden", "matched_policy": None, "escalation": "ceo"}
+            if permission_key and not self._effective_permission(conn, department_id, permission_key, store_id):
+                return {"allowed": False, "decision": "deny", "reason": "permission_denied", "matched_policy": None, "escalation": None}
+
+            evaluation_context = {
+                **context,
+                "action": action_name,
+                "store_id": store_id,
+                "department_id": department_id,
+                "department_code": department["code"],
+                "department_status": department["status"],
+                "actor_role": actor_role,
+            }
+            policies = self.list_policies(is_active=True)
+            priority_rank = {"action": 0, "role": 1, "department": 2, "store": 3, "company": 4}
+            candidates = sorted(
+                policies,
+                key=lambda item: (priority_rank.get(item["scope_type"], 99), int(item.get("priority", 100))),
+            )
+            matched = None
+            for policy in candidates:
+                scope = policy["scope_type"]
+                target_ok = (
+                    scope == "company"
+                    or (scope == "store" and str(policy["target_id"]) == str(store_id))
+                    or (scope == "department" and str(policy["target_id"]) in {str(department_id), department["code"]})
+                    or (scope == "role" and str(policy["target_id"]).lower() == actor_role)
+                    or (scope == "action" and str(policy["target_id"]) == action_name)
+                )
+                if not target_ok or not self._match_condition(evaluation_context, policy.get("condition")):
+                    continue
+                matched = policy
+                break
+
+            decision = "allow"
+            allowed = True
+            escalation = None
+            approval_chain = []
+            if matched:
+                effect = matched["effect"]
+                approval_chain = matched.get("approval_chain") or []
+                escalation = (matched.get("escalation") or {}).get("target")
+                if effect == "deny":
+                    allowed = False
+                    decision = "deny"
+                elif effect in {"require_approval", "require_ceo_approval"}:
+                    allowed = False
+                    decision = effect
+                elif effect == "suggest_only":
+                    decision = "suggest_only"
+                elif effect == "auto_execute":
+                    decision = "auto_execute"
+                elif effect == "escalate":
+                    allowed = False
+                    decision = "escalate"
+                elif effect == "ceo_only_visibility":
+                    allowed = actor_role in {"ceo", "super_admin"}
+                    decision = "allow" if allowed else "deny"
+
+            if (matched and matched.get("audit_required")) or decision != "allow":
+                self._log_audit(
+                    conn,
+                    actor_type=payload.get("actor_type", "human"),
+                    actor_id=payload.get("actor_id", "unknown"),
+                    action=f"governance.evaluate.{decision}",
+                    resource_type="department_action",
+                    resource_id=f"{department_id}:{action_name}",
+                    after={"decision": decision, "matched_policy": matched["policy_code"] if matched else None},
+                    status="success" if allowed else "blocked",
+                    reason=decision,
+                    store_id=store_id,
+                    department_id=department_id,
+                )
+                conn.commit()
+
+            return {
+                "allowed": allowed,
+                "decision": decision,
+                "matched_policy": matched["policy_code"] if matched else None,
+                "escalation": escalation,
+                "approval_chain": approval_chain,
+                "execution_mode": assignment.get("execution_mode") if assignment and assignment.get("execution_mode") else department.get("execution_mode", "suggest_only"),
+            }
         finally:
             conn.close()
 

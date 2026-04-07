@@ -156,4 +156,156 @@ CREATE TABLE IF NOT EXISTS cp_metrics (
     metric_value REAL,
     recorded_at TEXT DEFAULT (datetime('now'))
 );
+
+-- DEPARTMENT GOVERNANCE -------------------------------------------------------
+CREATE TABLE IF NOT EXISTS cp_departments (
+    id TEXT PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    category TEXT DEFAULT 'general',
+    status TEXT NOT NULL DEFAULT 'active',
+    is_system_default INTEGER NOT NULL DEFAULT 0,
+    allow_store_assignment INTEGER NOT NULL DEFAULT 1,
+    allow_ai_agent_execution INTEGER NOT NULL DEFAULT 1,
+    allow_human_assignment INTEGER NOT NULL DEFAULT 1,
+    requires_ceo_visibility_only INTEGER NOT NULL DEFAULT 0,
+    execution_mode TEXT NOT NULL DEFAULT 'suggest_only',
+    parent_department_id TEXT REFERENCES cp_departments(id),
+    created_at TEXT NOT NULL,
+    created_by TEXT DEFAULT '',
+    updated_at TEXT NOT NULL,
+    updated_by TEXT DEFAULT '',
+    deleted_at TEXT,
+    deleted_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_cp_departments_status ON cp_departments(status);
+CREATE INDEX IF NOT EXISTS idx_cp_departments_category ON cp_departments(category);
+
+CREATE TABLE IF NOT EXISTS cp_permissions (
+    id TEXT PRIMARY KEY,
+    permission_key TEXT NOT NULL UNIQUE,
+    permission_name TEXT NOT NULL,
+    module TEXT NOT NULL,
+    action TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cp_permissions_module ON cp_permissions(module);
+
+CREATE TABLE IF NOT EXISTS cp_department_permissions (
+    id TEXT PRIMARY KEY,
+    department_id TEXT NOT NULL REFERENCES cp_departments(id),
+    permission_id TEXT NOT NULL REFERENCES cp_permissions(id),
+    allowed INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(department_id, permission_id)
+);
+
+CREATE TABLE IF NOT EXISTS cp_store_departments (
+    id TEXT PRIMARY KEY,
+    store_id TEXT NOT NULL,
+    department_id TEXT NOT NULL REFERENCES cp_departments(id),
+    enabled INTEGER NOT NULL DEFAULT 1,
+    locked INTEGER NOT NULL DEFAULT 0,
+    hidden INTEGER NOT NULL DEFAULT 0,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    custom_policy_enabled INTEGER NOT NULL DEFAULT 0,
+    execution_mode TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    created_by TEXT DEFAULT '',
+    updated_by TEXT DEFAULT '',
+    UNIQUE(store_id, department_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cp_store_departments_store ON cp_store_departments(store_id);
+
+CREATE TABLE IF NOT EXISTS cp_store_department_permissions (
+    id TEXT PRIMARY KEY,
+    store_department_id TEXT NOT NULL REFERENCES cp_store_departments(id),
+    permission_id TEXT NOT NULL REFERENCES cp_permissions(id),
+    allowed INTEGER NOT NULL DEFAULT 1,
+    source TEXT NOT NULL DEFAULT 'override',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(store_department_id, permission_id)
+);
+
+CREATE TABLE IF NOT EXISTS cp_policies (
+    id TEXT PRIMARY KEY,
+    policy_code TEXT NOT NULL UNIQUE,
+    policy_name TEXT NOT NULL,
+    scope_type TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    condition_json TEXT DEFAULT '{}',
+    effect TEXT NOT NULL,
+    approval_chain_json TEXT DEFAULT '[]',
+    escalation_json TEXT DEFAULT '{}',
+    audit_required INTEGER NOT NULL DEFAULT 1,
+    priority INTEGER NOT NULL DEFAULT 100,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    effective_from TEXT,
+    effective_to TEXT,
+    created_by TEXT DEFAULT '',
+    updated_by TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cp_policies_scope_target ON cp_policies(scope_type, target_type, target_id, is_active);
+
+CREATE TABLE IF NOT EXISTS cp_audit_logs (
+    id TEXT PRIMARY KEY,
+    actor_type TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    resource_type TEXT NOT NULL,
+    resource_id TEXT NOT NULL,
+    before_json TEXT DEFAULT '{}',
+    after_json TEXT DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'success',
+    reason TEXT DEFAULT '',
+    store_id TEXT,
+    department_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cp_audit_logs_created ON cp_audit_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cp_audit_logs_resource ON cp_audit_logs(resource_type, resource_id);
+
+CREATE TABLE IF NOT EXISTS cp_roles (
+    id TEXT PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cp_role_permissions (
+    id TEXT PRIMARY KEY,
+    role_id TEXT NOT NULL REFERENCES cp_roles(id),
+    permission_id TEXT NOT NULL REFERENCES cp_permissions(id),
+    allowed INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(role_id, permission_id)
+);
+
+CREATE TABLE IF NOT EXISTS cp_department_roles (
+    id TEXT PRIMARY KEY,
+    department_id TEXT NOT NULL REFERENCES cp_departments(id),
+    role_id TEXT NOT NULL REFERENCES cp_roles(id),
+    UNIQUE(department_id, role_id)
+);
+
+CREATE TABLE IF NOT EXISTS cp_ai_agents (
+    id TEXT PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    department_id TEXT NOT NULL REFERENCES cp_departments(id),
+    store_id TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    execution_mode TEXT NOT NULL DEFAULT 'suggest_only',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """

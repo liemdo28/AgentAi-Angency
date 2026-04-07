@@ -1166,6 +1166,95 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
   gap: 8px;
 }
 
+.governance-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(340px, 1fr);
+  gap: 16px;
+}
+
+.governance-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 18px;
+  box-shadow: var(--shadow-card);
+}
+
+.governance-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.governance-table {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.governance-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.governance-table th {
+  text-align: left;
+  padding: 10px 12px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  background: var(--bg-surface2);
+  border-bottom: 1px solid var(--border);
+}
+
+.governance-table td {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  vertical-align: top;
+}
+
+.governance-table tr.selected td,
+.governance-table tr:hover td {
+  background: var(--bg-hover);
+}
+
+.governance-checklist,
+.permission-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.governance-check-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface2);
+  font-size: 12px;
+}
+
+.governance-check-item input {
+  margin-top: 2px;
+}
+
+.link-button {
+  border: none;
+  background: none;
+  color: var(--accent-light);
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
 .integration-layout {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
@@ -1323,6 +1412,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 
   .project-ops-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .governance-layout {
+    grid-template-columns: 1fr;
   }
 
   .integration-layout {
