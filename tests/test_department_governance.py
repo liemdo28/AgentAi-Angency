@@ -181,3 +181,67 @@ def test_governed_action_creates_approval_and_versions_exist(monkeypatch, tmp_pa
     simulations = client.get("/policies/simulations?limit=10")
     assert simulations.status_code == 200
     assert any(item["action"] == "reviews.reply.publish" for item in simulations.json())
+
+    approval_id = body["approval"]["id"]
+    approved = client.post(
+        f"/approvals/{approval_id}/resolve",
+        json={"status": "approved", "approved_by": "ceo"},
+    )
+    assert approved.status_code == 200
+    assert approved.json()["approval"]["execution"]["task"]["status"] == "pending"
+
+    tasks = client.get("/tasks")
+    assert tasks.status_code == 200
+    assert any(item["task_type"] == "governed_action" for item in tasks.json())
+
+
+def test_policy_rollback_restores_previous_snapshot(monkeypatch, tmp_path):
+    client, _ = _client(monkeypatch, tmp_path)
+    created = client.post(
+        "/policies",
+        json={
+            "policy_code": "POLICY_TEST_ROLLBACK",
+            "policy_name": "Rollback test",
+            "scope_type": "action",
+            "target_type": "action",
+            "target_id": "department.delete",
+            "condition_json": {"all": [{"field": "action", "op": "eq", "value": "department.delete"}]},
+            "effect": "require_ceo_approval",
+            "approval_chain_json": ["ceo"],
+            "escalation_json": {"target": "ceo"},
+            "audit_required": True,
+            "priority": 15,
+            "is_active": True,
+        },
+    )
+    assert created.status_code == 200
+    policy_id = created.json()["id"]
+
+    updated = client.put(
+        f"/policies/{policy_id}",
+        json={
+            "policy_code": "POLICY_TEST_ROLLBACK",
+            "policy_name": "Rollback test updated",
+            "scope_type": "action",
+            "target_type": "action",
+            "target_id": "department.delete",
+            "condition_json": {"all": [{"field": "action", "op": "eq", "value": "department.delete"}]},
+            "effect": "deny",
+            "approval_chain_json": [],
+            "escalation_json": {},
+            "audit_required": True,
+            "priority": 5,
+            "is_active": True,
+        },
+    )
+    assert updated.status_code == 200
+
+    versions = client.get(f"/policies/{policy_id}/versions")
+    assert versions.status_code == 200
+    items = versions.json()
+    assert len(items) >= 2
+    original_version = items[-1]
+
+    rolled = client.post(f"/policies/{policy_id}/versions/{original_version['id']}/rollback")
+    assert rolled.status_code == 200
+    assert rolled.json()["effect"] == "require_ceo_approval"

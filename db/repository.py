@@ -597,6 +597,18 @@ class ControlPlaneDB:
             (task_id, None, assigned_agent_id, title, description, self._now(), self._now()),
         )
 
+    def _ensure_default_agent(self, conn: sqlite3.Connection, agent_id: str = "workflow") -> None:
+        existing = conn.execute("SELECT id FROM cp_agents WHERE id = ?", (agent_id,)).fetchone()
+        if existing:
+            return
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO cp_agents (id, role, agent_type, model, budget_limit, status, config_json, total_cost, created_at)
+            VALUES (?, 'Workflow', 'system', '', 50.0, 'active', '{}', 0.0, ?)
+            """,
+            (agent_id, self._now()),
+        )
+
     # ── goals ─────────────────────────────────────────────────────────
 
     def create_goal(self, title: str, description: str = "", owner: str = "") -> dict:
@@ -662,12 +674,13 @@ class ControlPlaneDB:
         tid = str(uuid4())
         conn = self._conn()
         try:
+            self._ensure_default_agent(conn, assigned_agent_id)
             conn.execute(
                 """INSERT INTO cp_tasks
                    (id, goal_id, assigned_agent_id, title, description,
                     task_type, priority, context_json)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (tid, goal_id, assigned_agent_id, title, description,
+                (tid, goal_id or None, assigned_agent_id, title, description,
                  task_type, priority, json.dumps(context_json or {})),
             )
             conn.commit()
@@ -871,7 +884,13 @@ class ControlPlaneDB:
                 )
             conn.commit()
             refreshed = conn.execute("SELECT * FROM cp_approvals WHERE id = ?", (approval_id,)).fetchone()
-            return self._hydrate_approval(refreshed)
+            approval = self._hydrate_approval(refreshed)
+            if approval and status == "approved" and approval.get("resource_type") == "department_action":
+                execution = self.execute_governance_approval(approval_id, actor_id=approved_by or "system")
+                approval = self._hydrate_approval(conn.execute("SELECT * FROM cp_approvals WHERE id = ?", (approval_id,)).fetchone())
+                if approval is not None:
+                    approval["execution"] = execution
+            return approval
         finally:
             conn.close()
 
@@ -1854,6 +1873,48 @@ class ControlPlaneDB:
         finally:
             conn.close()
 
+    def get_store_department_permissions(self, store_id: str, department_id: str) -> dict:
+        conn = self._conn()
+        try:
+            assignment = self._store_department_assignment(conn, store_id, department_id)
+            if not assignment:
+                raise ValueError("Store department assignment not found.")
+            overrides = self._store_permission_overrides(conn, assignment["id"])
+            rows = conn.execute(
+                """
+                SELECT p.*, COALESCE(dp.allowed, 0) AS default_allowed
+                FROM cp_permissions p
+                LEFT JOIN cp_department_permissions dp
+                    ON dp.permission_id = p.id AND dp.department_id = ?
+                ORDER BY p.module ASC, p.permission_key ASC
+                """,
+                (department_id,),
+            ).fetchall()
+            permissions = []
+            for row in rows:
+                item = dict(row)
+                default_allowed = self._bool(item.get("default_allowed"))
+                override_value = overrides.get(item["permission_key"])
+                permissions.append(
+                    {
+                        "permission_key": item["permission_key"],
+                        "permission_name": item["permission_name"],
+                        "module": item["module"],
+                        "action": item["action"],
+                        "default_allowed": default_allowed,
+                        "allowed": override_value if override_value is not None else default_allowed,
+                        "source": "override" if override_value is not None else "default",
+                    }
+                )
+            return {
+                "store_id": store_id,
+                "department_id": department_id,
+                "store_department_id": assignment["id"],
+                "permissions": permissions,
+            }
+        finally:
+            conn.close()
+
     def list_policies(
         self,
         *,
@@ -1935,6 +1996,70 @@ class ControlPlaneDB:
                 item["snapshot"] = self._decode_json(item.get("snapshot_json"))
                 result.append(item)
             return result
+        finally:
+            conn.close()
+
+    def rollback_policy_version(self, policy_id: str, version_id: str, *, actor_id: str = "ceo", actor_type: str = "human") -> Optional[dict]:
+        conn = self._conn()
+        try:
+            version = conn.execute(
+                "SELECT * FROM cp_policy_versions WHERE id = ? AND policy_id = ?",
+                (version_id, policy_id),
+            ).fetchone()
+            current = self.get_policy(policy_id)
+            if not version or not current:
+                return None
+            snapshot = self._decode_json(version["snapshot_json"])
+            conn.execute(
+                """
+                UPDATE cp_policies
+                SET policy_code = ?, policy_name = ?, scope_type = ?, target_type = ?, target_id = ?,
+                    condition_json = ?, effect = ?, approval_chain_json = ?, escalation_json = ?,
+                    audit_required = ?, priority = ?, is_active = ?, effective_from = ?, effective_to = ?,
+                    updated_by = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    snapshot.get("policy_code", current["policy_code"]),
+                    snapshot.get("policy_name", current["policy_name"]),
+                    snapshot.get("scope_type", current["scope_type"]),
+                    snapshot.get("target_type", current["target_type"]),
+                    str(snapshot.get("target_id", current["target_id"])),
+                    json.dumps(snapshot.get("condition") or {}, ensure_ascii=False),
+                    snapshot.get("effect", current["effect"]),
+                    json.dumps(snapshot.get("approval_chain") or [], ensure_ascii=False),
+                    json.dumps(snapshot.get("escalation") or {}, ensure_ascii=False),
+                    int(bool(snapshot.get("audit_required", current["audit_required"]))),
+                    int(snapshot.get("priority", current["priority"])),
+                    int(bool(snapshot.get("is_active", current["is_active"]))),
+                    snapshot.get("effective_from", current.get("effective_from")),
+                    snapshot.get("effective_to", current.get("effective_to")),
+                    actor_id,
+                    self._now(),
+                    policy_id,
+                ),
+            )
+            rolled = self.get_policy(policy_id)
+            self._create_policy_version(
+                conn,
+                policy_id=policy_id,
+                snapshot=rolled or {},
+                created_by=actor_id,
+                change_note=f"Rollback to version {version['version_number']}",
+            )
+            self._log_audit(
+                conn,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                action="policy.rollback",
+                resource_type="policy",
+                resource_id=policy_id,
+                before=current,
+                after=rolled,
+                reason=f"Rollback to version {version['version_number']}",
+            )
+            conn.commit()
+            return self.get_policy(policy_id)
         finally:
             conn.close()
 
@@ -2283,6 +2408,81 @@ class ControlPlaneDB:
             },
         )
         return {"status": "pending_approval", "evaluation": result, "approval": approval}
+
+    def execute_governance_approval(self, approval_id: str, *, actor_id: str = "system") -> dict | None:
+        conn = self._conn()
+        try:
+            approval_row = conn.execute("SELECT * FROM cp_approvals WHERE id = ?", (approval_id,)).fetchone()
+            approval = self._hydrate_approval(approval_row)
+            if not approval or approval.get("status") != "approved" or approval.get("resource_type") != "department_action":
+                return None
+            decision = approval.get("decision") or {}
+            if decision.get("executed"):
+                return decision
+
+            request_payload = approval.get("request") or {}
+            action_name = request_payload.get("action", approval.get("resource_id", "department_action"))
+            department_id = approval.get("department_id")
+            store_id = approval.get("store_id")
+            execution = {
+                "executed": True,
+                "executed_at": self._now(),
+                "task": None,
+                "edge_command": None,
+            }
+
+            title = f"Governed action approved: {action_name}"
+            description = f"Approved governance action for department {department_id or 'unknown'} at store {store_id or 'n/a'}."
+            task = self.create_task(
+                title=title,
+                assigned_agent_id="workflow",
+                goal_id="",
+                description=description,
+                task_type="governed_action",
+                priority=2,
+                context_json={
+                    "approval_id": approval_id,
+                    "resource_type": approval.get("resource_type"),
+                    "resource_id": approval.get("resource_id"),
+                    "request": request_payload,
+                },
+            )
+            execution["task"] = task
+
+            edge_spec = request_payload.get("edge_command") or {}
+            if edge_spec.get("project_id") and edge_spec.get("machine_id") and edge_spec.get("command_type"):
+                edge_command = self.create_edge_command(
+                    project_id=edge_spec["project_id"],
+                    machine_id=edge_spec["machine_id"],
+                    machine_name=edge_spec.get("machine_name", edge_spec["machine_id"]),
+                    command_type=edge_spec["command_type"],
+                    payload=edge_spec.get("payload"),
+                    title=edge_spec.get("title", title),
+                    created_by=actor_id,
+                    source_suggestion_id="governance-approval",
+                )
+                execution["edge_command"] = edge_command
+
+            conn.execute(
+                "UPDATE cp_approvals SET decision_json = ? WHERE id = ?",
+                (json.dumps({**decision, **execution}, ensure_ascii=False), approval_id),
+            )
+            self._log_audit(
+                conn,
+                actor_type="system",
+                actor_id=actor_id,
+                action="governance.approval.execute",
+                resource_type="approval",
+                resource_id=approval_id,
+                after=execution,
+                status="success",
+                store_id=store_id,
+                department_id=department_id,
+            )
+            conn.commit()
+            return execution
+        finally:
+            conn.close()
 
     # ── metrics / stats ───────────────────────────────────────────────
 

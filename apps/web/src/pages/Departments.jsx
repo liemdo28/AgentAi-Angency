@@ -7,6 +7,7 @@ import {
   deleteDepartment,
   evaluatePolicy,
   getDepartmentPermissions,
+  getStoreDepartmentPermissions,
   getStoreDepartments,
   hideDepartment,
   listAuditLogs,
@@ -18,12 +19,14 @@ import {
   listStores,
   lockDepartment,
   requestGovernedAction,
+  rollbackPolicyVersion,
   restoreDepartment,
   unhideDepartment,
   unlockDepartment,
   updateDepartment,
   updateDepartmentPermissions,
   updatePolicy,
+  updateStoreDepartmentPermissions,
   updateStoreDepartments,
 } from '../api';
 
@@ -85,6 +88,8 @@ export default function Departments() {
   const [selectedDepartmentId, setSelectedDepartmentId] = useState('');
   const [selectedStoreId, setSelectedStoreId] = useState('');
   const [storeMatrix, setStoreMatrix] = useState([]);
+  const [selectedStoreDepartmentId, setSelectedStoreDepartmentId] = useState('');
+  const [storePermissionState, setStorePermissionState] = useState(null);
   const [search, setSearch] = useState('');
   const [departmentForm, setDepartmentForm] = useState(EMPTY_DEPARTMENT);
   const [policyForm, setPolicyForm] = useState(EMPTY_POLICY);
@@ -148,6 +153,16 @@ export default function Departments() {
     if (!selectedStoreId) return;
     getStoreDepartments(selectedStoreId).then(setStoreMatrix).catch(() => {});
   }, [selectedStoreId, departments.length]);
+
+  useEffect(() => {
+    if (!selectedStoreId || !selectedStoreDepartmentId) {
+      setStorePermissionState(null);
+      return;
+    }
+    getStoreDepartmentPermissions(selectedStoreId, selectedStoreDepartmentId)
+      .then(setStorePermissionState)
+      .catch(() => setStorePermissionState(null));
+  }, [selectedStoreId, selectedStoreDepartmentId]);
 
   useEffect(() => {
     if (selectedDepartment) {
@@ -249,6 +264,38 @@ export default function Departments() {
       });
       await refreshStoreMatrix();
       await loadCore();
+    } catch (error) {
+      window.alert(error.message);
+    }
+  };
+
+  const handleStorePermissionToggle = (permissionKey, allowed) => {
+    setStorePermissionState((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        permissions: current.permissions.map((item) =>
+          item.permission_key === permissionKey
+            ? { ...item, allowed, source: allowed === item.default_allowed ? 'default' : 'override' }
+            : item
+        ),
+      };
+    });
+  };
+
+  const saveStorePermissionOverrides = async () => {
+    if (!selectedStoreId || !selectedStoreDepartmentId || !storePermissionState) return;
+    try {
+      await updateStoreDepartmentPermissions(selectedStoreId, selectedStoreDepartmentId, {
+        permissions: storePermissionState.permissions.map((item) => ({
+          key: item.permission_key,
+          allowed: !!item.allowed,
+          source: item.allowed === item.default_allowed ? 'default' : 'override',
+        })),
+      });
+      const refreshed = await getStoreDepartmentPermissions(selectedStoreId, selectedStoreDepartmentId);
+      setStorePermissionState(refreshed);
+      await refreshStoreMatrix();
     } catch (error) {
       window.alert(error.message);
     }
@@ -476,7 +523,9 @@ export default function Departments() {
                   {storeMatrix.map((item) => (
                     <tr key={`${selectedStoreId}-${item.department_id}`}>
                       <td>
-                        <div style={{ fontWeight: 600 }}>{item.department_name}</div>
+                        <button className="link-button" style={{ fontWeight: 600 }} onClick={() => setSelectedStoreDepartmentId(item.department_id)}>
+                          {item.department_name}
+                        </button>
                         <div className="text-secondary" style={{ fontSize: 11 }}>{item.department_code}</div>
                       </td>
                       <td><input type="checkbox" checked={!!item.enabled} onChange={(e) => handleStoreMatrixToggle(item.department_id, 'enabled', e.target.checked)} /></td>
@@ -495,6 +544,36 @@ export default function Departments() {
             </div>
             <div style={{ marginTop: 14 }}>
               <button className="btn btn-primary" onClick={saveStoreMatrix}>Save Store Matrix</button>
+            </div>
+          </div>
+
+          <div className="governance-side">
+            <div className="settings-card">
+              <h3>Store Permission Override</h3>
+              {!selectedStoreDepartmentId && <div className="project-feed-empty">Choose a department row to edit store-level permission overrides.</div>}
+              {storePermissionState && (
+                <>
+                  <div className="project-feed-sub" style={{ marginBottom: 12 }}>
+                    {selectedStoreId} · {selectedStoreDepartmentId}
+                  </div>
+                  <div className="permission-grid" style={{ maxHeight: 420, overflowY: 'auto' }}>
+                    {storePermissionState.permissions.map((item) => (
+                      <label key={item.permission_key} className="governance-check-item">
+                        <input type="checkbox" checked={!!item.allowed} onChange={(e) => handleStorePermissionToggle(item.permission_key, e.target.checked)} />
+                        <span>
+                          <strong>{item.permission_key}</strong>
+                          <div className="text-secondary" style={{ fontSize: 11 }}>
+                            {item.module} · base {item.default_allowed ? 'allow' : 'deny'} · {item.source}
+                          </div>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  <div style={{ marginTop: 14 }}>
+                    <button className="btn btn-primary" onClick={saveStorePermissionOverrides}>Save Permission Overrides</button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -540,6 +619,19 @@ export default function Departments() {
                       }
                     >
                       Edit
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => {
+                        const latestVersion = policyVersions.find((version) => version.snapshot?.policy_code === item.policy_code);
+                        if (!latestVersion) {
+                          window.alert('No version available to rollback.');
+                          return;
+                        }
+                        rollbackPolicyVersion(item.id, latestVersion.id).then(() => loadCore()).catch((error) => window.alert(error.message));
+                      }}
+                    >
+                      Rollback
                     </button>
                   </div>
                 </div>

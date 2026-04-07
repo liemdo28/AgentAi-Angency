@@ -78,6 +78,7 @@ export const getDepartmentPermissions = (id) => request(`/departments/${id}/perm
 export const updateDepartmentPermissions = (id, data) =>
   request(`/departments/${id}/permissions`, { method: 'PUT', body: JSON.stringify(data) });
 export const getStoreDepartments = (storeId) => request(`/stores/${storeId}/departments`);
+export const getStoreDepartmentPermissions = (storeId, departmentId) => request(`/stores/${storeId}/departments/${departmentId}/permissions`);
 export const updateStoreDepartments = (storeId, data) =>
   request(`/stores/${storeId}/departments`, { method: 'PUT', body: JSON.stringify(data) });
 export const updateStoreDepartmentPermissions = (storeId, departmentId, data) =>
@@ -95,6 +96,7 @@ export const deactivatePolicy = (id) => request(`/policies/${id}/deactivate`, { 
 export const evaluatePolicy = (data) => request('/policies/evaluate', { method: 'POST', body: JSON.stringify(data) });
 export const requestGovernedAction = (data) => request('/governance/actions/request', { method: 'POST', body: JSON.stringify(data) });
 export const listPolicyVersions = (id) => request(`/policies/${id}/versions`);
+export const rollbackPolicyVersion = (policyId, versionId) => request(`/policies/${policyId}/versions/${versionId}/rollback`, { method: 'POST' });
 export const listPolicySimulations = (params = {}) => {
   const query = new URLSearchParams(
     Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== '')

@@ -613,6 +613,14 @@ def update_store_departments(
     )
 
 
+@app.get("/stores/{store_id}/departments/{department_id}/permissions")
+def get_store_department_permissions(store_id: str, department_id: str):
+    try:
+        return db.get_store_department_permissions(store_id, department_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.put("/stores/{store_id}/departments/{department_id}/permissions")
 def update_store_department_permissions(
     store_id: str,
@@ -706,6 +714,22 @@ def request_governed_action(body: GovernanceActionRequest):
 @app.get("/policies/{policy_id}/versions")
 def list_policy_versions(policy_id: str):
     return db.list_policy_versions(policy_id)
+
+
+@app.post("/policies/{policy_id}/versions/{version_id}/rollback")
+def rollback_policy_version(
+    policy_id: str,
+    version_id: str,
+    x_actor_id: str | None = Header(default=None),
+    x_actor_role: str | None = Header(default=None),
+):
+    actor_id, actor_role = _actor_defaults(x_actor_id, x_actor_role)
+    if actor_role not in {"ceo", "super_admin"}:
+        raise HTTPException(status_code=403, detail="Only CEO or Super Admin can rollback policies.")
+    policy = db.rollback_policy_version(policy_id, version_id, actor_id=actor_id)
+    if not policy:
+        raise HTTPException(status_code=404, detail="Policy version not found.")
+    return policy
 
 
 @app.get("/policies/simulations")
