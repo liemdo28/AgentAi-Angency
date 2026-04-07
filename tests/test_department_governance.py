@@ -161,6 +161,13 @@ def test_governed_action_creates_approval_and_versions_exist(monkeypatch, tmp_pa
             "action": "reviews.reply.publish",
             "permission_key": "reviews.reply",
             "context": {"rating": 2, "sentiment": "negative"},
+            "edge_command": {
+                "project_id": "integration-full",
+                "machine_id": "machine-stockton-01",
+                "machine_name": "Stockton Ops Box",
+                "command_type": "download_missing_reports",
+                "payload": {"store": "Stockton"},
+            },
         },
     )
     assert request_result.status_code == 200
@@ -189,10 +196,24 @@ def test_governed_action_creates_approval_and_versions_exist(monkeypatch, tmp_pa
     )
     assert approved.status_code == 200
     assert approved.json()["approval"]["execution"]["task"]["status"] == "pending"
+    assert approved.json()["approval"]["execution"]["edge_command"]["status"] == "pending"
+    assert approved.json()["approval"]["request"]["edge_command"]["machine_id"] == "machine-stockton-01"
 
     tasks = client.get("/tasks")
     assert tasks.status_code == 200
     assert any(item["task_type"] == "governed_action" for item in tasks.json())
+
+    commands = client.get("/projects/integration-full/commands?machine_id=machine-stockton-01")
+    assert commands.status_code == 200
+    assert any(item["command_type"] == "download_missing_reports" for item in commands.json())
+
+    approvals_all = client.get("/approvals?status=all&resource_type=department_action")
+    assert approvals_all.status_code == 200
+    assert any(item["id"] == approval_id and item["decision"]["edge_command"]["machine_id"] == "machine-stockton-01" for item in approvals_all.json())
+
+    activity = client.get("/activity")
+    assert activity.status_code == 200
+    assert any(item["id"] == approval_id for item in activity.json()["approvals"])
 
 
 def test_policy_rollback_restores_previous_snapshot(monkeypatch, tmp_path):

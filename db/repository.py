@@ -382,6 +382,27 @@ class ControlPlaneDB:
         item["decision"] = self._decode_json(item.get("decision_json"))
         return item
 
+    def _enrich_approval_execution(self, approval: dict | None) -> dict | None:
+        if not approval:
+            return approval
+        decision = approval.get("decision") or {}
+        if not isinstance(decision, dict):
+            return approval
+        execution = dict(decision)
+        task_ref = decision.get("task") or {}
+        if isinstance(task_ref, dict) and task_ref.get("id"):
+            latest_task = self.get_task(task_ref["id"])
+            if latest_task:
+                execution["task"] = latest_task
+        edge_ref = decision.get("edge_command") or {}
+        if isinstance(edge_ref, dict) and edge_ref.get("id"):
+            latest_edge = self.get_edge_command(edge_ref["id"])
+            if latest_edge:
+                execution["edge_command"] = latest_edge
+        if execution != decision:
+            approval["decision"] = execution
+        return approval
+
     def _department_permission_map(self, conn: sqlite3.Connection, department_id: str) -> dict[str, bool]:
         rows = conn.execute(
             """
@@ -897,17 +918,27 @@ class ControlPlaneDB:
     def list_approvals(self, status: str = "pending", resource_type: str | None = None) -> List[dict]:
         conn = self._conn()
         try:
-            if resource_type:
-                rows = conn.execute(
-                    "SELECT * FROM cp_approvals WHERE status = ? AND resource_type = ? ORDER BY created_at DESC",
-                    (status, resource_type),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM cp_approvals WHERE status = ? ORDER BY created_at DESC",
-                    (status,),
-                ).fetchall()
-            return [item for item in (self._hydrate_approval(r) for r in rows) if item]
+            clauses = []
+            params: list[Any] = []
+            if status and status != "all":
+                clauses.append("status = ?")
+                params.append(status)
+            if resource_type and resource_type != "all":
+                clauses.append("resource_type = ?")
+                params.append(resource_type)
+            where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+            rows = conn.execute(
+                f"SELECT * FROM cp_approvals {where_clause} ORDER BY created_at DESC",
+                params,
+            ).fetchall()
+            return [
+                item
+                for item in (
+                    self._enrich_approval_execution(self._hydrate_approval(r))
+                    for r in rows
+                )
+                if item
+            ]
         finally:
             conn.close()
 
@@ -1217,6 +1248,17 @@ class ControlPlaneDB:
                     (project_id, limit),
                 ).fetchall()
             return [item for item in (self._hydrate_edge_command(row) for row in rows) if item]
+        finally:
+            conn.close()
+
+    def get_edge_command(self, command_id: str) -> Optional[dict]:
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT * FROM cp_edge_commands WHERE id = ?",
+                (command_id,),
+            ).fetchone()
+            return self._hydrate_edge_command(row)
         finally:
             conn.close()
 
@@ -2404,6 +2446,7 @@ class ControlPlaneDB:
                 "action": payload.get("action"),
                 "permission_key": payload.get("permission_key"),
                 "context": payload.get("context") or {},
+                "edge_command": payload.get("edge_command") or None,
                 "evaluation": result,
             },
         )

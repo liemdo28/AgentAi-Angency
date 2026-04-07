@@ -14,6 +14,8 @@ import {
   listDepartments,
   listPermissions,
   listPolicies,
+  listProjectMachines,
+  listProjects,
   listPolicySimulations,
   listPolicyVersions,
   listStores,
@@ -64,6 +66,16 @@ const EMPTY_POLICY = {
   effective_to: '',
 };
 
+const EMPTY_EDGE_COMMAND = {
+  enabled: false,
+  project_id: '',
+  machine_id: '',
+  machine_name: '',
+  command_type: '',
+  title: '',
+  payload_json: '{}',
+};
+
 function statusClass(status) {
   if (status === 'active') return 'success';
   if (status === 'locked' || status === 'hidden') return 'pending';
@@ -76,6 +88,11 @@ function formatDate(value) {
   return value.replace('T', ' ').replace('Z', ' UTC').slice(0, 19);
 }
 
+function parseJsonInput(raw, fallback) {
+  if (!raw || !raw.trim()) return fallback;
+  return JSON.parse(raw);
+}
+
 export default function Departments() {
   const [tab, setTab] = useState('all');
   const [departments, setDepartments] = useState([]);
@@ -85,6 +102,9 @@ export default function Departments() {
   const [auditLogs, setAuditLogs] = useState([]);
   const [simulations, setSimulations] = useState([]);
   const [policyVersions, setPolicyVersions] = useState([]);
+  const [selectedPolicyId, setSelectedPolicyId] = useState('');
+  const [edgeProjects, setEdgeProjects] = useState([]);
+  const [edgeMachines, setEdgeMachines] = useState([]);
   const [selectedDepartmentId, setSelectedDepartmentId] = useState('');
   const [selectedStoreId, setSelectedStoreId] = useState('');
   const [storeMatrix, setStoreMatrix] = useState([]);
@@ -102,9 +122,15 @@ export default function Departments() {
     action: 'reviews.reply.publish',
     permission_key: 'reviews.reply',
     context_json: '{"rating":2,"sentiment":"negative"}',
+    edge_command: { ...EMPTY_EDGE_COMMAND },
   });
   const [policyEvalResult, setPolicyEvalResult] = useState(null);
   const [saving, setSaving] = useState(false);
+
+  const selectedPolicy = useMemo(
+    () => policies.find((item) => item.id === selectedPolicyId) || null,
+    [policies, selectedPolicyId]
+  );
 
   const selectedDepartment = useMemo(
     () => departments.find((item) => item.id === selectedDepartmentId) || null,
@@ -142,6 +168,7 @@ export default function Departments() {
   useEffect(() => {
     listPermissions().then(setPermissions).catch(() => {});
     loadCore().catch(() => {});
+    listProjects().then(setEdgeProjects).catch(() => setEdgeProjects([]));
   }, []);
 
   useEffect(() => {
@@ -188,8 +215,49 @@ export default function Departments() {
       setPolicyVersions([]);
       return;
     }
-    listPolicyVersions(policies[0].id).then(setPolicyVersions).catch(() => setPolicyVersions([]));
-  }, [policies]);
+    const nextPolicyId = selectedPolicyId || policies[0].id;
+    if (nextPolicyId !== selectedPolicyId) {
+      setSelectedPolicyId(nextPolicyId);
+      return;
+    }
+    listPolicyVersions(nextPolicyId).then(setPolicyVersions).catch(() => setPolicyVersions([]));
+  }, [policies, selectedPolicyId]);
+
+  useEffect(() => {
+    const projectId = policyEvalForm.edge_command?.project_id;
+    if (!projectId) {
+      setEdgeMachines([]);
+      return;
+    }
+    listProjectMachines(projectId)
+      .then((items) => {
+        setEdgeMachines(items);
+        if (!policyEvalForm.edge_command.machine_id && items[0]) {
+          setPolicyEvalForm((current) => ({
+            ...current,
+            edge_command: {
+              ...current.edge_command,
+              machine_id: items[0].machine_id,
+              machine_name: items[0].machine_name || items[0].machine_id,
+            },
+          }));
+        }
+      })
+      .catch(() => setEdgeMachines([]));
+  }, [policyEvalForm.edge_command?.project_id]);
+
+  useEffect(() => {
+    if (policyEvalForm.edge_command?.project_id || !edgeProjects.length) return;
+    const preferred = edgeProjects.find((item) => item.id === 'integration-full') || edgeProjects[0];
+    if (!preferred) return;
+    setPolicyEvalForm((current) => ({
+      ...current,
+      edge_command: {
+        ...current.edge_command,
+        project_id: preferred.id,
+      },
+    }));
+  }, [edgeProjects, policyEvalForm.edge_command?.project_id]);
 
   const refreshStoreMatrix = async () => {
     if (!selectedStoreId) return;
@@ -301,6 +369,32 @@ export default function Departments() {
     }
   };
 
+  const updateEdgeCommandForm = (field, value) => {
+    setPolicyEvalForm((current) => ({
+      ...current,
+      edge_command: {
+        ...current.edge_command,
+        [field]: value,
+      },
+    }));
+  };
+
+  const buildEdgeCommandPayload = () => {
+    const edgeCommand = policyEvalForm.edge_command || EMPTY_EDGE_COMMAND;
+    if (!edgeCommand.enabled) return null;
+    if (!edgeCommand.project_id || !edgeCommand.machine_id || !edgeCommand.command_type) {
+      throw new Error('Project, machine, and command type are required for edge execution.');
+    }
+    return {
+      project_id: edgeCommand.project_id,
+      machine_id: edgeCommand.machine_id,
+      machine_name: edgeCommand.machine_name || edgeCommand.machine_id,
+      command_type: edgeCommand.command_type,
+      title: edgeCommand.title || `Governed ${policyEvalForm.action}`,
+      payload: parseJsonInput(edgeCommand.payload_json || '{}', {}),
+    };
+  };
+
   const handlePolicySubmit = async () => {
     try {
       const payload = {
@@ -330,7 +424,7 @@ export default function Departments() {
         ...policyEvalForm,
         store_id: policyEvalForm.store_id || null,
         permission_key: policyEvalForm.permission_key || null,
-        context: JSON.parse(policyEvalForm.context_json || '{}'),
+        context: parseJsonInput(policyEvalForm.context_json || '{}', {}),
       });
       setPolicyEvalResult(result);
     } catch (error) {
@@ -340,12 +434,14 @@ export default function Departments() {
 
   const handleGovernedRequest = async () => {
     try {
+      const edgeCommand = buildEdgeCommandPayload();
       const result = await requestGovernedAction({
         ...policyEvalForm,
         task_id: null,
         store_id: policyEvalForm.store_id || null,
         permission_key: policyEvalForm.permission_key || null,
-        context: JSON.parse(policyEvalForm.context_json || '{}'),
+        context: parseJsonInput(policyEvalForm.context_json || '{}', {}),
+        edge_command: edgeCommand,
       });
       setPolicyEvalResult(result);
       setSimulations(await listPolicySimulations({ limit: 20 }));
@@ -585,9 +681,22 @@ export default function Departments() {
             <div className="section-title">Policy Registry</div>
             <div className="project-feed">
               {policies.map((item) => (
-                <div key={item.id} className="project-feed-row">
+                <div
+                  key={item.id}
+                  className="project-feed-row"
+                  style={{
+                    border: selectedPolicyId === item.id ? '1px solid var(--accent)' : undefined,
+                    borderRadius: 12,
+                  }}
+                >
                   <div>
-                    <div className="project-feed-title">{item.policy_name}</div>
+                    <button
+                      className="link-button"
+                      style={{ fontWeight: 700 }}
+                      onClick={() => setSelectedPolicyId(item.id)}
+                    >
+                      {item.policy_name}
+                    </button>
                     <div className="project-feed-sub">{item.policy_code} · {item.scope_type} · {item.effect} · priority {item.priority}</div>
                   </div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -600,39 +709,30 @@ export default function Departments() {
                     <button
                       className="btn btn-ghost btn-sm"
                       onClick={() =>
-                        setPolicyForm({
-                          policy_code: item.policy_code,
-                          policy_name: item.policy_name,
-                          scope_type: item.scope_type,
-                          target_type: item.target_type,
-                          target_id: item.target_id,
-                          condition_json: JSON.stringify(item.condition || {}, null, 2),
-                          effect: item.effect,
-                          approval_chain_json: JSON.stringify(item.approval_chain || [], null, 2),
-                          escalation_json: JSON.stringify(item.escalation || {}, null, 2),
-                          audit_required: !!item.audit_required,
-                          priority: item.priority || 100,
-                          is_active: !!item.is_active,
-                          effective_from: item.effective_from || '',
-                          effective_to: item.effective_to || '',
-                        })
+                        (() => {
+                          setSelectedPolicyId(item.id);
+                          setPolicyForm({
+                            policy_code: item.policy_code,
+                            policy_name: item.policy_name,
+                            scope_type: item.scope_type,
+                            target_type: item.target_type,
+                            target_id: item.target_id,
+                            condition_json: JSON.stringify(item.condition || {}, null, 2),
+                            effect: item.effect,
+                            approval_chain_json: JSON.stringify(item.approval_chain || [], null, 2),
+                            escalation_json: JSON.stringify(item.escalation || {}, null, 2),
+                            audit_required: !!item.audit_required,
+                            priority: item.priority || 100,
+                            is_active: !!item.is_active,
+                            effective_from: item.effective_from || '',
+                            effective_to: item.effective_to || '',
+                          });
+                        })()
                       }
                     >
                       Edit
                     </button>
-                    <button
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => {
-                        const latestVersion = policyVersions.find((version) => version.snapshot?.policy_code === item.policy_code);
-                        if (!latestVersion) {
-                          window.alert('No version available to rollback.');
-                          return;
-                        }
-                        rollbackPolicyVersion(item.id, latestVersion.id).then(() => loadCore()).catch((error) => window.alert(error.message));
-                      }}
-                    >
-                      Rollback
-                    </button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => setSelectedPolicyId(item.id)}>History</button>
                   </div>
                 </div>
               ))}
@@ -674,6 +774,95 @@ export default function Departments() {
               <div className="form-group mt-2"><label>Action</label><input value={policyEvalForm.action} onChange={(e) => setPolicyEvalForm({ ...policyEvalForm, action: e.target.value })} /></div>
               <div className="form-group mt-2"><label>Permission Key</label><input value={policyEvalForm.permission_key} onChange={(e) => setPolicyEvalForm({ ...policyEvalForm, permission_key: e.target.value })} /></div>
               <div className="form-group mt-2"><label>Context JSON</label><textarea rows={4} value={policyEvalForm.context_json} onChange={(e) => setPolicyEvalForm({ ...policyEvalForm, context_json: e.target.value })} /></div>
+              <div className="settings-card" style={{ padding: 14, marginTop: 14, background: 'rgba(24, 60, 122, 0.12)' }}>
+                <div className="section-title" style={{ marginBottom: 8 }}>Optional Edge Command</div>
+                <label className="governance-check-item" style={{ marginBottom: 12 }}>
+                  <input
+                    type="checkbox"
+                    checked={!!policyEvalForm.edge_command?.enabled}
+                    onChange={(e) => updateEdgeCommandForm('enabled', e.target.checked)}
+                  />
+                  <span>Queue command to a remote machine after approval</span>
+                </label>
+                {policyEvalForm.edge_command?.enabled && (
+                  <>
+                    <div className="form-row">
+                      <div className="form-group" style={{ flex: 1 }}>
+                        <label>Project</label>
+                        <select
+                          value={policyEvalForm.edge_command?.project_id || ''}
+                          onChange={(e) => {
+                            const selected = edgeProjects.find((item) => item.id === e.target.value);
+                            setPolicyEvalForm((current) => ({
+                              ...current,
+                              edge_command: {
+                                ...current.edge_command,
+                                project_id: e.target.value,
+                                machine_id: '',
+                                machine_name: '',
+                                title: current.edge_command.title || (selected ? `Governed action for ${selected.name}` : ''),
+                              },
+                            }));
+                          }}
+                        >
+                          <option value="">Select project</option>
+                          {edgeProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+                        </select>
+                      </div>
+                      <div className="form-group" style={{ flex: 1 }}>
+                        <label>Machine</label>
+                        <select
+                          value={policyEvalForm.edge_command?.machine_id || ''}
+                          onChange={(e) => {
+                            const selected = edgeMachines.find((item) => item.machine_id === e.target.value);
+                            setPolicyEvalForm((current) => ({
+                              ...current,
+                              edge_command: {
+                                ...current.edge_command,
+                                machine_id: e.target.value,
+                                machine_name: selected?.machine_name || e.target.value,
+                              },
+                            }));
+                          }}
+                        >
+                          <option value="">Select machine</option>
+                          {edgeMachines.map((machine) => <option key={machine.machine_id} value={machine.machine_id}>{machine.machine_name || machine.machine_id}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="form-row mt-2">
+                      <div className="form-group" style={{ flex: 1 }}>
+                        <label>Command Type</label>
+                        <select
+                          value={policyEvalForm.edge_command?.command_type || ''}
+                          onChange={(e) => updateEdgeCommandForm('command_type', e.target.value)}
+                        >
+                          <option value="">Select command</option>
+                          <option value="download_missing_reports">download_missing_reports</option>
+                          <option value="catch_up_qb_sync">catch_up_qb_sync</option>
+                          <option value="custom">custom</option>
+                        </select>
+                      </div>
+                      <div className="form-group" style={{ flex: 1 }}>
+                        <label>Command Title</label>
+                        <input
+                          value={policyEvalForm.edge_command?.title || ''}
+                          onChange={(e) => updateEdgeCommandForm('title', e.target.value)}
+                          placeholder="Optional operator-facing title"
+                        />
+                      </div>
+                    </div>
+                    <div className="form-group mt-2">
+                      <label>Payload JSON</label>
+                      <textarea
+                        rows={4}
+                        value={policyEvalForm.edge_command?.payload_json || '{}'}
+                        onChange={(e) => updateEdgeCommandForm('payload_json', e.target.value)}
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
               <div style={{ marginTop: 16 }}>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button className="btn btn-primary" onClick={handlePolicyEvaluate}>Evaluate</button>
@@ -687,20 +876,47 @@ export default function Departments() {
                   <div className="project-feed-sub">Escalation: {(policyEvalResult.escalation || policyEvalResult.evaluation?.escalation) || 'none'}</div>
                   <div className="project-feed-sub">Execution mode: {(policyEvalResult.execution_mode || policyEvalResult.evaluation?.execution_mode) || '-'}</div>
                   {policyEvalResult.approval && <div className="project-feed-sub">Approval queued: {policyEvalResult.approval.approval_level} · {policyEvalResult.approval.id.slice(0, 8)}</div>}
+                  {policyEvalResult.approval?.request?.edge_command?.machine_id && (
+                    <div className="project-feed-sub">
+                      Edge target: {policyEvalResult.approval.request.edge_command.project_id} · {policyEvalResult.approval.request.edge_command.machine_name || policyEvalResult.approval.request.edge_command.machine_id}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
 
             <div className="settings-card">
               <h3>Policy Versions</h3>
+              {selectedPolicy && (
+                <div className="project-feed-sub" style={{ marginBottom: 12 }}>
+                  {selectedPolicy.policy_code} · choose a version to rollback
+                </div>
+              )}
               <div className="project-feed">
                 {policyVersions.length === 0 && <div className="project-feed-empty">No version history yet.</div>}
-                {policyVersions.slice(0, 6).map((item) => (
+                {policyVersions.slice(0, 8).map((item) => (
                   <div key={item.id} className="project-feed-row">
                     <div>
                       <div className="project-feed-title">v{item.version_number} · {item.snapshot?.policy_name || item.snapshot?.policy_code}</div>
-                      <div className="project-feed-sub">{item.change_note || 'Policy updated'} · {formatDate(item.created_at)}</div>
+                      <div className="project-feed-sub">
+                        {(item.snapshot?.effect || 'unknown')} · {item.change_note || 'Policy updated'} · {formatDate(item.created_at)}
+                      </div>
                     </div>
+                    {selectedPolicy && (
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() =>
+                          rollbackPolicyVersion(selectedPolicy.id, item.id)
+                            .then(async () => {
+                              await loadCore();
+                              setSelectedPolicyId(selectedPolicy.id);
+                            })
+                            .catch((error) => window.alert(error.message))
+                        }
+                      >
+                        Rollback to v{item.version_number}
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

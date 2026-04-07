@@ -214,6 +214,7 @@ class GovernanceEvaluateRequest(BaseModel):
 
 class GovernanceActionRequest(GovernanceEvaluateRequest):
     task_id: str | None = None
+    edge_command: dict | None = None
 
 
 # ── Dashboard ─────────────────────────────────────────────────────────
@@ -398,10 +399,11 @@ def resolve_approval(approval_id: str, body: ApprovalResolve):
 
 @app.get("/activity")
 def get_activity(limit: int = 50):
-    """Combined feed of recent tasks + jobs for the activity page."""
+    """Combined feed of recent tasks + jobs + approvals for the activity page."""
     tasks = db.list_tasks(limit=limit)
     jobs = db.list_jobs(limit=limit)
-    return {"tasks": tasks, "jobs": jobs}
+    approvals = db.list_approvals(status="all")[:limit]
+    return {"tasks": tasks, "jobs": jobs, "approvals": approvals}
 
 
 # ── Department Governance ────────────────────────────────────────────
