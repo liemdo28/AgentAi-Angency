@@ -22,6 +22,8 @@ export default function IntegrationOps() {
   const [busySuggestionId, setBusySuggestionId] = useState('');
   const [busyCommandId, setBusyCommandId] = useState('');
   const [busyMachineId, setBusyMachineId] = useState('');
+  const [busyMachineCommandKey, setBusyMachineCommandKey] = useState('');
+  const [selectedMachineId, setSelectedMachineId] = useState('');
 
   const load = async () => {
     setLoading(true);
@@ -38,6 +40,21 @@ export default function IntegrationOps() {
     const t = setInterval(() => load().catch(() => {}), 15000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    if (!project) return;
+    const ops = project.integration_ops || {};
+    const remoteNodes = ops.remote_nodes || [];
+    const preferred =
+      remoteNodes.find((node) => node.online && !node.paused)?.machine_id ||
+      remoteNodes[0]?.machine_id ||
+      ops.source_machine_id ||
+      '';
+    setSelectedMachineId((current) => {
+      if (current && remoteNodes.some((node) => node.machine_id === current)) return current;
+      return preferred;
+    });
+  }, [project]);
 
   const handleSuggestion = async (suggestion) => {
     if (!suggestion?.prompt) return;
@@ -91,9 +108,7 @@ export default function IntegrationOps() {
     return null;
   };
 
-  const handleQueueCommand = async (suggestion) => {
-    const machineId = ops.source_machine_id;
-    const machineName = ops.source_machine_name;
+  const handleQueueCommand = async (suggestion, machineId, machineName) => {
     const payload = buildCommandRequest(suggestion, machineId, machineName);
     if (!payload) {
       window.alert('This suggestion cannot be converted into a machine command yet.');
@@ -108,6 +123,25 @@ export default function IntegrationOps() {
       window.alert(`Could not queue command: ${error.message}`);
     } finally {
       setBusyCommandId('');
+    }
+  };
+
+  const handleMachineCommand = async (node, commandType, title, payload = {}) => {
+    const key = `${node.machine_id}:${commandType}`;
+    setBusyMachineCommandKey(key);
+    try {
+      await createProjectCommand('integration-full', {
+        machine_id: node.machine_id,
+        machine_name: node.machine_name || node.machine_id,
+        command_type: commandType,
+        title,
+        payload,
+      });
+      await load();
+    } catch (error) {
+      window.alert(`Could not queue machine command: ${error.message}`);
+    } finally {
+      setBusyMachineCommandKey('');
     }
   };
 
@@ -140,6 +174,20 @@ export default function IntegrationOps() {
   const suggestions = ops.ai_suggestions || [];
   const remoteNodes = ops.remote_nodes || [];
   const recentCommands = ops.recent_commands || [];
+  const machineOptions = remoteNodes.length
+    ? remoteNodes
+    : (ops.source_machine_id
+        ? [{
+            machine_id: ops.source_machine_id,
+            machine_name: ops.source_machine_name || ops.source_machine_id,
+            online: true,
+            runtime: ops.runtime || {},
+          }]
+        : []);
+  const selectedMachine =
+    machineOptions.find((node) => node.machine_id === selectedMachineId) ||
+    machineOptions[0] ||
+    null;
 
   return (
     <div className="page">
@@ -235,6 +283,23 @@ export default function IntegrationOps() {
         <div className="integration-side">
           <div className="integration-panel">
             <div className="section-title">AI Next Actions</div>
+            <div className="settings-item" style={{ marginBottom: 12, alignItems: 'center' }}>
+              <span className="settings-key">Dispatch To</span>
+              <select
+                className="filter-select"
+                value={selectedMachineId}
+                onChange={(event) => setSelectedMachineId(event.target.value)}
+                style={{ maxWidth: 260 }}
+              >
+                {machineOptions.length === 0 && <option value="">No remote worker online</option>}
+                {machineOptions.map((node) => (
+                  <option key={node.machine_id} value={node.machine_id}>
+                    {node.machine_name || node.machine_id}
+                    {node.online ? ' · online' : ' · offline'}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div className="project-suggestion-list">
               {suggestions.length === 0 && <div className="project-feed-empty">No suggestions right now.</div>}
               {suggestions.map((suggestion) => (
@@ -250,11 +315,11 @@ export default function IntegrationOps() {
                   </button>
                   <button
                     className="btn btn-ghost btn-sm"
-                    onClick={() => handleQueueCommand(suggestion)}
-                    disabled={!ops.source_machine_id || busyCommandId === suggestion.id}
+                    onClick={() => handleQueueCommand(suggestion, selectedMachine?.machine_id, selectedMachine?.machine_name)}
+                    disabled={!selectedMachine?.machine_id || busyCommandId === suggestion.id}
                     style={{ marginTop: 8 }}
                   >
-                    {busyCommandId === suggestion.id ? 'Queueing...' : `Send to ${ops.source_machine_name || 'machine'}`}
+                    {busyCommandId === suggestion.id ? 'Queueing...' : `Send to ${selectedMachine?.machine_name || 'machine'}`}
                   </button>
                 </div>
               ))}
@@ -314,6 +379,22 @@ export default function IntegrationOps() {
               <span className="settings-key">Received</span>
               <span className="settings-val">{formatDateTime(ops.source_received_at)}</span>
             </div>
+            <div className="settings-item">
+              <span className="settings-key">Runtime Mode</span>
+              <span className="settings-val">{ops.runtime?.mode || '-'}</span>
+            </div>
+            <div className="settings-item">
+              <span className="settings-key">Worker State</span>
+              <span className="settings-val">{ops.runtime?.worker_status || '-'}</span>
+            </div>
+            <div className="settings-item">
+              <span className="settings-key">Active Command</span>
+              <span className="settings-val">{ops.runtime?.active_command_type || '-'}</span>
+            </div>
+            <div className="settings-item">
+              <span className="settings-key">Headless Downloads</span>
+              <span className="settings-val">{ops.runtime?.headless_downloads ? 'enabled' : 'disabled'}</span>
+            </div>
           </div>
 
           <div className="integration-panel">
@@ -331,6 +412,14 @@ export default function IntegrationOps() {
                     </div>
                     <div className="project-feed-sub">
                       Last seen: {formatDateTime(node.last_seen_at)} · {node.online ? 'online' : 'offline'}
+                    </div>
+                    <div className="project-feed-sub">
+                      Mode: {node.runtime?.mode || 'gui'} · Worker: {node.runtime?.worker_status || 'idle'}
+                      {node.runtime?.active_command_type ? ` · Active: ${node.runtime.active_command_type}` : ''}
+                    </div>
+                    <div className="project-feed-sub">
+                      Browser: {node.runtime?.headless_downloads ? 'headless' : 'visible'} · Snapshot interval: {node.runtime?.snapshot_interval_seconds || '-'}s
+                      {node.runtime?.last_snapshot_published_at ? ` · Published: ${formatDateTime(node.runtime.last_snapshot_published_at)}` : ''}
                     </div>
                     <div className="project-feed-sub">
                       Download gaps: {node.summary?.download_gap_count ?? 0} · QB gaps: {node.summary?.qb_gap_count ?? 0}
@@ -355,6 +444,20 @@ export default function IntegrationOps() {
                         disabled={busyMachineId === node.machine_id}
                       >
                         {node.draining ? 'Clear Drain' : 'Drain Queue'}
+                      </button>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => handleMachineCommand(node, 'publish_snapshot_now', `Publish snapshot · ${node.machine_name || node.machine_id}`)}
+                        disabled={busyMachineCommandKey === `${node.machine_id}:publish_snapshot_now`}
+                      >
+                        {busyMachineCommandKey === `${node.machine_id}:publish_snapshot_now` ? 'Queueing...' : 'Snapshot Now'}
+                      </button>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => handleMachineCommand(node, 'run_environment_diagnostics', `Self check · ${node.machine_name || node.machine_id}`)}
+                        disabled={busyMachineCommandKey === `${node.machine_id}:run_environment_diagnostics`}
+                      >
+                        {busyMachineCommandKey === `${node.machine_id}:run_environment_diagnostics` ? 'Queueing...' : 'Self Check'}
                       </button>
                     </div>
                   </div>

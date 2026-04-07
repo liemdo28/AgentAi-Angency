@@ -982,6 +982,7 @@ def _project_snapshot_nodes(project_id: str) -> list[dict]:
     nodes = []
     for machine in machines:
         snapshot = snapshots.get(machine.get("machine_id"), {})
+        snapshot_payload = snapshot.get("snapshot") or {}
         last_seen_raw = machine.get("last_seen_at") or snapshot.get("received_at")
         last_seen_dt = None
         if last_seen_raw:
@@ -1004,6 +1005,8 @@ def _project_snapshot_nodes(project_id: str) -> list[dict]:
                 "pause_reason": machine.get("pause_reason") or "",
                 "last_snapshot_at": machine.get("last_snapshot_at"),
                 "last_command_at": machine.get("last_command_at"),
+                "generated_at": snapshot_payload.get("generated_at"),
+                "runtime": snapshot_payload.get("runtime") or {},
                 "summary": snapshot.get("summary") or {},
             }
         )

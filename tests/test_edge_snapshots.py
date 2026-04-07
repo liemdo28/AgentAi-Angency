@@ -44,6 +44,7 @@ def test_projects_endpoint_prefers_remote_snapshot(monkeypatch, tmp_path):
         "app_version": "v2.2",
         "snapshot": {
             "generated_at": "2026-04-07T10:00:00+00:00",
+            "runtime": {"mode": "headless_worker", "worker_status": "idle"},
             "summary": {
                 "stores_tracked": 7,
                 "download_gap_count": 3,
@@ -73,6 +74,7 @@ def test_projects_endpoint_prefers_remote_snapshot(monkeypatch, tmp_path):
     assert integration["integration_ops"]["source_machine_name"] == "Stockton Frontdesk"
     assert integration["integration_ops"]["summary"]["download_gap_count"] == 3
     assert len(integration["integration_ops"]["remote_nodes"]) == 1
+    assert integration["integration_ops"]["remote_nodes"][0]["runtime"]["mode"] == "headless_worker"
 
 
 def test_edge_command_queue_dispatch_and_result(monkeypatch, tmp_path):
