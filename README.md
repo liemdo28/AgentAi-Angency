@@ -8,6 +8,30 @@ Also includes a data collection email workflow: agency sends report requests →
 ```bash
 python3 -m pip install -r requirements.txt
 ```
+
+## Cleanup
+
+Safely clean local build artifacts and caches without touching source code or runtime data:
+
+```bash
+python scripts/clean_workspace.py
+```
+
+Convenience wrappers:
+
+```bash
+./clean.sh
+clean.bat
+```
+
+Optional flags:
+
+```bash
+python scripts/clean_workspace.py --deps
+python scripts/clean_workspace.py --logs
+python scripts/clean_workspace.py --dry-run
+```
+
 ## Windows Desktop App
 
 Chạy giao diện desktop (Tkinter, tối ưu bố cục từ 720p đến 4K):
