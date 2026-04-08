@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { executeSmartIssue, listProjects } from '../api';
+import { executeSmartIssue, listProjects, runProjectQaSimulation } from '../api';
 
 const TYPE_COLORS = {
   python: '#3572A5',
@@ -46,11 +46,17 @@ function formatTime(value) {
   return value.replace('T', ' ').replace('Z', ' UTC').slice(0, 19);
 }
 
+function formatScore(value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '-';
+  return `${value.toFixed(2)}/10`;
+}
+
 export default function Projects() {
   const [projects, setProjects] = useState([]);
   const [filter, setFilter] = useState('');
   const [busySuggestionId, setBusySuggestionId] = useState('');
   const [successMsg, setSuccessMsg] = useState(null); // {projectId, text, taskCount, phases}
+  const [qaRuns, setQaRuns] = useState({});
   const navigate = useNavigate();
 
   const load = () => listProjects().then(setProjects).catch(() => {});
@@ -70,14 +76,28 @@ export default function Projects() {
   const idleCount = countByStatus('Idle');
   const offlineCount = countByStatus('Offline');
 
-  const handleSuggestion = async (suggestion, projectId) => {
+  const handleSuggestion = async (suggestion, project) => {
     if (!suggestion?.prompt) return;
     setBusySuggestionId(suggestion.id);
     setSuccessMsg(null);
     try {
+      if (suggestion.action_type === 'qa_simulation') {
+        const result = await runProjectQaSimulation(project.id, {
+          goal: suggestion.prompt,
+          tester_count: 1000,
+          max_iterations: 100,
+          pass_threshold: 8.5,
+        });
+        setQaRuns((current) => ({
+          ...current,
+          [project.id]: result,
+        }));
+        return;
+      }
+
       const result = await executeSmartIssue(suggestion.prompt);
       setSuccessMsg({
-        projectId,
+        projectId: project.id,
         text: suggestion.title,
         taskCount: result.total_created || 0,
         phases: result.total_phases || 0,
@@ -85,14 +105,21 @@ export default function Projects() {
       // Auto-dismiss after 8 seconds
       setTimeout(() => setSuccessMsg(null), 8000);
     } catch (error) {
-      setSuccessMsg({
-        projectId,
-        text: `Error: ${error.message}`,
-        taskCount: 0,
-        phases: 0,
-        isError: true,
-      });
-      setTimeout(() => setSuccessMsg(null), 5000);
+      if (suggestion.action_type === 'qa_simulation') {
+        setQaRuns((current) => ({
+          ...current,
+          [project.id]: { error: error.message || 'Simulation failed.' },
+        }));
+      } else {
+        setSuccessMsg({
+          projectId: project.id,
+          text: `Error: ${error.message}`,
+          taskCount: 0,
+          phases: 0,
+          isError: true,
+        });
+        setTimeout(() => setSuccessMsg(null), 5000);
+      }
     } finally {
       setBusySuggestionId('');
     }
@@ -148,6 +175,8 @@ export default function Projects() {
           const suggestions = ops?.ai_suggestions || [];
           const profileSignals = opsProfile.signals || [];
           const profileSuggestions = opsProfile.suggestions || [];
+          const mergedSuggestions = [...suggestions, ...profileSuggestions.filter((item) => item.action_type === 'qa_simulation')];
+          const qaRun = qaRuns[p.id];
 
           return (
             <div key={p.id} className="org-card project-card" style={{ textAlign: 'left', padding: 18 }}>
@@ -304,17 +333,19 @@ export default function Projects() {
 
                   <div className="project-section-title">AI Next Actions</div>
                   <div className="project-suggestion-list">
-                    {suggestions.length === 0 && <div className="project-feed-empty">No suggestions right now.</div>}
-                    {suggestions.map((suggestion) => (
+                    {mergedSuggestions.length === 0 && <div className="project-feed-empty">No suggestions right now.</div>}
+                    {mergedSuggestions.map((suggestion) => (
                       <div key={suggestion.id} className="project-suggestion-card">
                         <div className="project-feed-title">{suggestion.title}</div>
                         <div className="project-feed-sub">{suggestion.description}</div>
                         <button
                           className="btn btn-ghost btn-sm"
-                          onClick={() => handleSuggestion(suggestion, p.id)}
+                          onClick={() => handleSuggestion(suggestion, p)}
                           disabled={busySuggestionId === suggestion.id}
                         >
-                          {busySuggestionId === suggestion.id ? 'Creating...' : suggestion.action_label}
+                          {busySuggestionId === suggestion.id
+                            ? suggestion.action_type === 'qa_simulation' ? 'Running...' : 'Creating...'
+                            : suggestion.action_label}
                         </button>
                       </div>
                     ))}
@@ -360,14 +391,102 @@ export default function Projects() {
                         <div className="project-feed-sub">{suggestion.description}</div>
                         <button
                           className="btn btn-ghost btn-sm"
-                          onClick={() => handleSuggestion(suggestion, p.id)}
+                          onClick={() => handleSuggestion(suggestion, p)}
                           disabled={busySuggestionId === suggestion.id}
                         >
-                          {busySuggestionId === suggestion.id ? 'Creating...' : suggestion.action_label}
+                          {busySuggestionId === suggestion.id
+                            ? suggestion.action_type === 'qa_simulation' ? 'Running...' : 'Creating...'
+                            : suggestion.action_label}
                         </button>
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {qaRun && (
+                <div className="project-ops">
+                  {qaRun.error ? (
+                    <div className="project-feed-empty" style={{ color: 'var(--red)' }}>
+                      QA simulation failed: {qaRun.error}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="project-ops-grid">
+                        <div className="project-mini-stat">
+                          <div className="project-mini-label">Tester Score</div>
+                          <div className="project-mini-value">{formatScore(qaRun.final_score)}</div>
+                        </div>
+                        <div className="project-mini-stat">
+                          <div className="project-mini-label">Loops Used</div>
+                          <div className="project-mini-value">{qaRun.iterations_run}/{qaRun.max_iterations}</div>
+                        </div>
+                        <div className="project-mini-stat">
+                          <div className="project-mini-label">Tester Gate</div>
+                          <div className="project-mini-value">{qaRun.passed ? 'PASS' : 'RETRY'}</div>
+                        </div>
+                        <div className="project-mini-stat">
+                          <div className="project-mini-label">Handoff</div>
+                          <div className="project-mini-value">{qaRun.final_report?.handoff_target === 'CEO -> user/admin' ? 'CEO' : 'Rework'}</div>
+                        </div>
+                      </div>
+
+                      <div className="project-section-title">QA Simulation</div>
+                      <div className="project-feed">
+                        <div className="project-feed-row">
+                          <div>
+                            <div className="project-feed-title">{qaRun.final_report?.summary}</div>
+                            <div className="project-feed-sub">{qaRun.ceo_summary}</div>
+                          </div>
+                          <span className={`badge ${qaRun.passed ? 'success' : 'failed'}`}>
+                            {qaRun.final_report?.qa_gate}
+                          </span>
+                        </div>
+                        {qaRun.department_plan?.map((item) => (
+                          <div key={`${p.id}-${item.department}`} className="project-feed-row">
+                            <div>
+                              <div className="project-feed-title">{item.department}</div>
+                              <div className="project-feed-sub">{item.mission}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="project-section-title">Tester Findings</div>
+                      <div className="project-feed">
+                        {(qaRun.unresolved_findings?.length ? qaRun.unresolved_findings : qaRun.initial_findings || []).slice(0, 4).map((item, index) => (
+                          <div key={`${p.id}-finding-${index}`} className="project-feed-row">
+                            <div>
+                              <div className="project-feed-title">{item.title}</div>
+                              <div className="project-feed-sub">{item.detail}</div>
+                            </div>
+                            <span className={`badge ${item.severity === 'high' ? 'failed' : 'pending'}`}>
+                              {item.category}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="project-section-title">Last Tester Loops</div>
+                      <div className="project-feed">
+                        {[...(qaRun.history || [])].slice(-4).reverse().map((item) => (
+                          <div key={`${p.id}-loop-${item.iteration}`} className="project-feed-row">
+                            <div>
+                              <div className="project-feed-title">
+                                Loop {item.iteration} · {formatScore(item.tester_score)}
+                              </div>
+                              <div className="project-feed-sub">
+                                {item.approvals} approvals · {item.bug_reports} bug reports · UI {item.ui_flags} · Workflow {item.workflow_flags} · Features {item.feature_flags}
+                              </div>
+                            </div>
+                            <span className={`badge ${item.pass ? 'success' : 'pending'}`}>
+                              {item.pass ? 'pass' : 'retry'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
 

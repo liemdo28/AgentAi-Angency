@@ -23,6 +23,7 @@ def test_build_project_ops_profile_for_next_frontend(tmp_path):
     assert profile["kind"] == "next_frontend"
     assert any(signal["label"] == "Env template" for signal in profile["signals"])
     assert any(item["id"] == "review-dashboard-frontend-verify" for item in profile["suggestions"])
+    assert any(item["id"] == "review-dashboard-qa-simulate" and item["action_type"] == "qa_simulation" for item in profile["suggestions"])
 
 
 def test_build_project_ops_profile_for_python_service(tmp_path):
@@ -40,6 +41,7 @@ def test_build_project_ops_profile_for_python_service(tmp_path):
     assert profile["kind"] == "python_service"
     assert any(signal["label"] == "Infrastructure" for signal in profile["signals"])
     assert any(item["id"] == "review-system-service-verify" for item in profile["suggestions"])
+    assert any(item["id"] == "review-system-qa-simulate" and item["action_type"] == "qa_simulation" for item in profile["suggestions"])
 
 
 def test_projects_endpoint_uses_relative_path(monkeypatch, tmp_path):
@@ -72,3 +74,4 @@ def test_projects_endpoint_uses_relative_path(monkeypatch, tmp_path):
     assert projects[0]["exists"] is True
     assert Path(projects[0]["local_path"]) == nested
     assert projects[0]["ops_profile"]["kind"] == "python_service"
+    assert any(item["action_type"] == "qa_simulation" for item in projects[0]["ops_profile"]["suggestions"])

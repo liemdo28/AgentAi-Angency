@@ -15,13 +15,21 @@ def _signal(label: str, value: str, status: str = "ok") -> dict:
     return {"label": label, "value": value, "status": status}
 
 
-def _action(action_id: str, title: str, description: str, prompt: str, action_label: str = "Create workflow") -> dict:
+def _action(
+    action_id: str,
+    title: str,
+    description: str,
+    prompt: str,
+    action_label: str = "Create workflow",
+    action_type: str = "workflow",
+) -> dict:
     return {
         "id": action_id,
         "title": title,
         "description": description,
         "prompt": prompt,
         "action_label": action_label,
+        "action_type": action_type,
     }
 
 
@@ -118,6 +126,18 @@ def _generic_actions(project_id: str, project_name: str, kind: str) -> list[dict
     return []
 
 
+def _qa_simulation_action(project_id: str, project_name: str, kind: str) -> dict:
+    kind_label = kind.replace("_", " ") if kind else "project"
+    return _action(
+        f"{project_id}-qa-simulate",
+        "Run 1k tester simulation",
+        "Simulate the CEO-to-department-to-tester loop with 1,000 testers and up to 100 feedback rounds.",
+        f"Run a QA simulation for {project_name} as a {kind_label}, validate UI, workflow, feature coverage, and defect readiness, and stop only when the tester score reaches at least 8.5/10.",
+        action_label="Run simulation",
+        action_type="qa_simulation",
+    )
+
+
 def build_project_ops_profile(project_id: str, project_path: Path, meta: dict, status: str) -> dict:
     package = _package_manifest(project_path)
     scripts = package.get("scripts") or {}
@@ -181,6 +201,8 @@ def build_project_ops_profile(project_id: str, project_path: Path, meta: dict, s
 
     else:
         suggestions.extend(_generic_actions(project_id, meta["name"], kind))
+
+    suggestions.append(_qa_simulation_action(project_id, meta["name"], kind))
 
     return {
         "kind": kind,

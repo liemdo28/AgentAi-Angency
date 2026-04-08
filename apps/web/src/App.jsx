@@ -14,6 +14,7 @@ import Costs from './pages/Costs';
 import Activity from './pages/Activity';
 import Approvals from './pages/Approvals';
 import Settings from './pages/Settings';
+import DevPanel from './pages/DevPanel';
 import { getStats } from './api';
 import './styles.css';
 
@@ -90,6 +91,7 @@ const PAGE_TITLES = {
   '/costs': 'Costs',
   '/activity': 'Activity',
   '/approvals': 'Approvals',
+  '/dev': 'Dev Agent',
   '/settings': 'Settings',
 };
 
@@ -177,6 +179,7 @@ function AppShell() {
           <NavLink to="/issues"><Icon name="issues" /> Issues {running > 0 && <span className="badge-live">{running} live</span>}</NavLink>
           <NavLink to="/routines"><Icon name="routines" /> Routines</NavLink>
           <NavLink to="/goals"><Icon name="goals" /> Goals</NavLink>
+          <NavLink to="/dev"><Icon name="activity" /> Dev Agent</NavLink>
         </div>
 
         <div className="sidebar-divider" />
@@ -220,6 +223,7 @@ function AppShell() {
           <Route path="/costs" element={<Costs />} />
           <Route path="/activity" element={<Activity />} />
           <Route path="/approvals" element={<Approvals />} />
+          <Route path="/dev" element={<DevPanel />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>

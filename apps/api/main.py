@@ -36,6 +36,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from db.repository import ControlPlaneDB
 from apps.api.project_ops import build_project_ops_profile
+from apps.api.qa_simulation import simulate_project_qa_loop
 from core.orchestrator.registry import AgentRegistry
 from core.policies.engine import PolicyEngine
 from core.orchestrator.engine import Orchestrator
@@ -215,6 +216,13 @@ class GovernanceEvaluateRequest(BaseModel):
 class GovernanceActionRequest(GovernanceEvaluateRequest):
     task_id: str | None = None
     edge_command: dict | None = None
+
+
+class ProjectQaSimulationRequest(BaseModel):
+    goal: str = ""
+    tester_count: int = 1000
+    max_iterations: int = 100
+    pass_threshold: float = 8.5
 
 
 # ── Dashboard ─────────────────────────────────────────────────────────
@@ -1394,6 +1402,43 @@ def get_project(project_id: str):
         "ops_profile": ops_profile,
         **git,
     }
+
+
+@app.post("/projects/{project_id}/qa-simulate")
+def run_project_qa_simulation(project_id: str, body: ProjectQaSimulationRequest):
+    meta = PROJECT_REGISTRY.get(project_id)
+    if not meta:
+        raise HTTPException(404, "Project not found")
+
+    project_path = _resolve_project_path(project_id, meta)
+    git = _git_info(project_path)
+    status, status_extra = _detect_status(project_path, meta.get("port"), meta.get("url"))
+    ops_profile = build_project_ops_profile(project_id, project_path, meta, status)
+
+    project_snapshot = {
+        "id": project_id,
+        "name": meta["name"],
+        "description": meta["description"],
+        "type": meta["type"],
+        "category": meta["category"],
+        "tech": meta["tech"],
+        "github": meta.get("github"),
+        "exists": project_path.exists(),
+        "status": status,
+        "latency_ms": status_extra.get("latency_ms"),
+        "status_code": status_extra.get("status_code"),
+        "dirty": git.get("dirty", False),
+        "branch": git.get("branch"),
+        "ops_profile": ops_profile,
+    }
+
+    return simulate_project_qa_loop(
+        project_snapshot,
+        goal=body.goal,
+        tester_count=body.tester_count,
+        max_iterations=body.max_iterations,
+        pass_threshold=body.pass_threshold,
+    )
 
 
 @app.get("/projects/{project_id}/live-status")

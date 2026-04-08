@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { listStores } from '../api';
+import { listStores, getMarketingStores, triggerMarketingSync } from '../api';
 
 const BRAND_COLORS = {
   bakudan: { bg: 'rgba(239, 68, 68, 0.12)', color: '#ef4444', icon: 'B' },
@@ -8,12 +8,46 @@ const BRAND_COLORS = {
   ift: { bg: 'rgba(81, 207, 102, 0.12)', color: '#51cf66', icon: 'F' },
 };
 
+function formatDate(dateStr) {
+  if (!dateStr) return 'Never';
+  const d = new Date(dateStr.replace(' ', 'T'));
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
 export default function Stores() {
   const [stores, setStores] = useState([]);
+  const [marketingData, setMarketingData] = useState(null);
+  const [marketingLoading, setMarketingLoading] = useState(true);
+  const [syncingAll, setSyncingAll] = useState(false);
+  const [syncingId, setSyncingId] = useState(null);
 
   useEffect(() => {
     listStores().then(setStores).catch(() => {});
+    getMarketingStores()
+      .then(setMarketingData)
+      .catch(() => {})
+      .finally(() => setMarketingLoading(false));
   }, []);
+
+  const handleSyncAll = async () => {
+    setSyncingAll(true);
+    try {
+      await triggerMarketingSync();
+      const fresh = await getMarketingStores();
+      setMarketingData(fresh);
+    } catch (e) { /* ignore */ }
+    setSyncingAll(false);
+  };
+
+  const handleSyncOne = async (storeId) => {
+    setSyncingId(storeId);
+    try {
+      await triggerMarketingSync(storeId);
+      const fresh = await getMarketingStores();
+      setMarketingData(fresh);
+    } catch (e) { /* ignore */ }
+    setSyncingId(null);
+  };
 
   const brands = [...new Set(stores.map(s => s.brand))];
 
@@ -80,6 +114,82 @@ export default function Stores() {
           </div>
         );
       })}
+
+      {/* Marketing Live Data */}
+      <div style={{ marginTop: 32 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div className="section-title" style={{ margin: 0 }}>Marketing Live Data</div>
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={handleSyncAll}
+            disabled={syncingAll || marketingLoading}
+          >
+            {syncingAll ? 'Syncing...' : 'Sync All'}
+          </button>
+        </div>
+
+        {marketingLoading ? (
+          <div className="org-card" style={{ padding: 24, textAlign: 'center' }}>
+            <span className="text-secondary">Loading marketing data...</span>
+          </div>
+        ) : !marketingData?.stores?.length ? (
+          <div className="org-card" style={{ padding: 24, textAlign: 'center' }}>
+            <span className="text-secondary">No marketing store data available.</span>
+          </div>
+        ) : (
+          <>
+            {marketingData.totals && (
+              <div className="stats-row" style={{ gridTemplateColumns: 'repeat(2, 1fr)', marginBottom: 16 }}>
+                <div className="stat-card">
+                  <div className="stat-label">Total Marketing Revenue</div>
+                  <div className="stat-value accent">${marketingData.totals.revenue?.toLocaleString() ?? '---'}</div>
+                </div>
+                <div className="stat-card">
+                  <div className="stat-label">Total Marketing Orders</div>
+                  <div className="stat-value">{marketingData.totals.orders?.toLocaleString() ?? '---'}</div>
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 12 }}>
+              {marketingData.stores.map(ms => (
+                <div key={ms.id} className="org-card" style={{ textAlign: 'left', padding: 18 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>{ms.label || ms.id}</div>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => handleSyncOne(ms.id)}
+                      disabled={syncingId === ms.id}
+                      style={{ fontSize: 11 }}
+                    >
+                      {syncingId === ms.id ? 'Syncing...' : 'Sync'}
+                    </button>
+                  </div>
+                  <div className="text-secondary" style={{ fontSize: 12, marginBottom: 8 }}>
+                    Last updated: {formatDate(ms.last_updated)}
+                  </div>
+                  {ms.data && (
+                    <div style={{ display: 'flex', gap: 16, fontSize: 13 }}>
+                      {ms.data.revenue != null && (
+                        <div>
+                          <span className="text-secondary">Revenue: </span>
+                          <span style={{ fontWeight: 600 }}>${ms.data.revenue.toLocaleString()}</span>
+                        </div>
+                      )}
+                      {ms.data.orders != null && (
+                        <div>
+                          <span className="text-secondary">Orders: </span>
+                          <span style={{ fontWeight: 600 }}>{ms.data.orders.toLocaleString()}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
