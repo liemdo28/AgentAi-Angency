@@ -111,6 +111,19 @@ export const listAuditLogs = (params = {}) => {
   return request(`/audit-logs${query ? `?${query}` : ''}`);
 };
 
+// Task Execution
+export const executeTask = (id) => request(`/tasks/${id}/execute`, { method: 'POST' });
+
+// Marketing Sync
+export const getMarketingStores = () => request('/marketing/stores');
+export const getMarketingStore = (id) => request(`/marketing/stores/${id}`);
+export const triggerMarketingSync = (storeId) => request(`/marketing/sync${storeId ? `?store_id=${storeId}` : ''}`, { method: 'POST' });
+export const getMarketingSummary = () => request('/marketing/summary');
+export const getMarketingHealth = () => request('/marketing/health');
+
+// LLM Stats
+export const getLlmStats = () => request('/llm/stats');
+
 // Stores
 export const listStores = () => request('/stores');
 export const getStore = (id) => request(`/stores/${id}`);

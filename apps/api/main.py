@@ -348,6 +348,86 @@ def cancel_task(task_id: str):
     return {"status": "cancelled"}
 
 
+@app.post("/tasks/{task_id}/execute")
+def execute_task(task_id: str):
+    """Actually execute a pending task via LLM agent."""
+    task = db.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.get("status") not in ("pending", "failed"):
+        raise HTTPException(status_code=409, detail=f"Task is {task['status']}, not pending")
+
+    from core.orchestrator.executor import AgentExecutor
+    executor = AgentExecutor()
+    db.update_task_status(task_id, "running")
+
+    try:
+        result = executor.execute(task)
+        if result.get("status") == "success":
+            db.update_task_status(task_id, "success")
+            db.save_job(
+                task_id=task_id,
+                agent_id=task.get("assigned_agent_id", ""),
+                input_data={"description": task.get("description", "")},
+                output_data=result,
+            )
+        else:
+            db.update_task_status(task_id, "failed")
+        return result
+    except Exception as exc:
+        db.update_task_status(task_id, "failed")
+        return {"status": "error", "output": str(exc)}
+
+
+# ── Marketing Sync ────────────────────────────────────────────────────
+
+@app.get("/marketing/stores")
+def marketing_stores():
+    """Get all store data from marketing.bakudanramen.com."""
+    from core.connectors.marketing_sync import MarketingSync
+    sync = MarketingSync()
+    return sync.get_all_stores()
+
+
+@app.get("/marketing/stores/{store_id}")
+def marketing_store(store_id: str):
+    """Get data for a specific store."""
+    from core.connectors.marketing_sync import MarketingSync
+    sync = MarketingSync()
+    return sync.get_store(store_id)
+
+
+@app.post("/marketing/sync")
+def marketing_sync(store_id: Optional[str] = None):
+    """Trigger marketing data sync."""
+    from core.connectors.marketing_sync import MarketingSync
+    sync = MarketingSync()
+    return sync.trigger_sync(store_id)
+
+
+@app.get("/marketing/summary")
+def marketing_summary():
+    """Get AI-generated summary of all stores."""
+    from core.connectors.marketing_sync import MarketingSync
+    sync = MarketingSync()
+    return sync.get_summary()
+
+
+@app.get("/marketing/health")
+def marketing_health():
+    """Check marketing API health."""
+    from core.connectors.marketing_sync import MarketingSync
+    sync = MarketingSync()
+    return sync.health_check()
+
+
+@app.get("/llm/stats")
+def llm_stats():
+    """Get LLM router statistics (token usage, provider availability)."""
+    from core.orchestrator.executor import get_router
+    return get_router().get_stats()
+
+
 # ── Agents ────────────────────────────────────────────────────────────
 
 @app.post("/agents")

@@ -25,6 +25,7 @@ from core.agents import (
     MarketingAgent,
     ReviewAgent,
     TaskFlowAgent,
+    DevAgent,
 )
 from db.repository import ControlPlaneDB
 
@@ -56,6 +57,9 @@ def build_registry() -> AgentRegistry:
     registry.register("connector-marketing", MarketingAgent())
     registry.register("connector-review", ReviewAgent())
     registry.register("connector-taskflow", TaskFlowAgent())
+
+    # 4) Dev agent (code read/write/deploy)
+    registry.register("dev-agent", DevAgent())
 
     logger.info("Registry built: %d agents", len(registry))
     return registry
