@@ -362,6 +362,11 @@ class ToastIngestPipeline:
                     [values[c] for c in cols],
                 )
                 inserted += 1
+            except sqlite3.OperationalError as e:
+                # Table-missing or schema errors are fatal — re-raise
+                raise sqlite3.OperationalError(
+                    f"Raw insert into '{table_name}' failed at row {i}: {e}"
+                ) from e
             except sqlite3.Error as e:
                 logger.warning("Raw insert error at row %d: %s", i, e)
 

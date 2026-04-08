@@ -225,6 +225,40 @@ CREATE TABLE IF NOT EXISTS raw_menu (
 );
 CREATE INDEX IF NOT EXISTS idx_raw_menu_upload ON raw_menu(upload_file_id);
 
+CREATE TABLE IF NOT EXISTS raw_kitchen_details (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    upload_file_id  TEXT NOT NULL REFERENCES upload_files(id),
+    row_index       INTEGER NOT NULL,
+    location        TEXT,
+    order_id        TEXT,
+    item_name       TEXT,
+    station         TEXT,
+    ticket_time_sec TEXT,
+    created_at      TEXT,
+    fulfilled_at    TEXT,
+    business_date   TEXT,
+    raw_json        TEXT,
+    UNIQUE(upload_file_id, row_index)
+);
+CREATE INDEX IF NOT EXISTS idx_raw_kitchen_upload ON raw_kitchen_details(upload_file_id);
+
+CREATE TABLE IF NOT EXISTS raw_cash_management (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    upload_file_id  TEXT NOT NULL REFERENCES upload_files(id),
+    row_index       INTEGER NOT NULL,
+    location        TEXT,
+    business_date   TEXT,
+    employee        TEXT,
+    drawer_name     TEXT,
+    expected_amount TEXT,
+    actual_amount   TEXT,
+    over_short      TEXT,
+    close_time      TEXT,
+    raw_json        TEXT,
+    UNIQUE(upload_file_id, row_index)
+);
+CREATE INDEX IF NOT EXISTS idx_raw_cash_upload ON raw_cash_management(upload_file_id);
+
 -- ============================================================================
 -- NORMALIZED TABLES — typed, deduped, ready for dashboards
 -- ============================================================================
