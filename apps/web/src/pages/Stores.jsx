@@ -54,13 +54,18 @@ export default function Stores() {
   return (
     <div className="page">
       <div className="page-header">
-        <h1>Stores</h1>
+        <div>
+          <h1>Stores</h1>
+          <div className="page-subtitle">
+            Review your location network, grouped by brand, with live marketing sync data layered underneath.
+          </div>
+        </div>
         <span className="text-secondary" style={{ fontSize: 13 }}>
           {stores.length} locations across {brands.length} brands
         </span>
       </div>
 
-      <div className="stats-row" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+      <div className="stats-row">
         <div className="stat-card">
           <div className="stat-label">Total Locations</div>
           <div className="stat-value accent">{stores.length}</div>
@@ -149,7 +154,7 @@ export default function Stores() {
         ) : (
           <>
             {marketingData.totals && (
-              <div className="stats-row" style={{ gridTemplateColumns: 'repeat(2, 1fr)', marginBottom: 16 }}>
+              <div className="stats-row" style={{ marginBottom: 16 }}>
                 <div className="stat-card">
                   <div className="stat-label">Total Marketing Revenue</div>
                   <div className="stat-value accent">${marketingData.totals.revenue?.toLocaleString() ?? '---'}</div>

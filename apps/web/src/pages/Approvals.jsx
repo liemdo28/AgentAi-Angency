@@ -32,7 +32,12 @@ export default function Approvals() {
   return (
     <div className="page">
       <div className="page-header">
-        <h1>Approval Queue</h1>
+        <div>
+          <h1>Approval Queue</h1>
+          <div className="page-subtitle">
+            Review operational approvals, governance actions, and downstream execution trails before release.
+          </div>
+        </div>
         <div className="tab-bar">
           {['pending', 'approved', 'rejected', 'all'].map(s => (
             <button key={s} className={`tab-btn ${filter === s ? 'active' : ''}`} onClick={() => setFilter(s)}>

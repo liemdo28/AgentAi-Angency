@@ -63,7 +63,12 @@ export default function OrgChart() {
   return (
     <div className="page">
       <div className="page-header">
-        <h1>Org Chart</h1>
+        <div>
+          <h1>Org Chart</h1>
+          <div className="page-subtitle">
+            Explore the active workforce by level, responsibilities, model family, and current operational load.
+          </div>
+        </div>
         <span className="text-secondary" style={{ fontSize: 13 }}>{agents.length} agents deployed</span>
       </div>
 

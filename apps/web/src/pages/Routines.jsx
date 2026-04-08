@@ -60,15 +60,20 @@ export default function Routines() {
   return (
     <div className="page">
       <div className="page-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <h1>Routines</h1>
-          {activeNow.length > 0 && <span className="badge-live">{activeNow.length} active now</span>}
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <h1>Routines</h1>
+            {activeNow.length > 0 && <span className="badge-live">{activeNow.length} active now</span>}
+          </div>
+          <div className="page-subtitle">
+            Understand when automated work is supposed to happen and who is active at the current hour.
+          </div>
         </div>
         <span className="badge active" style={{ fontSize: 12 }}>Beta</span>
       </div>
 
       {/* Stats */}
-      <div className="stats-row" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+      <div className="stats-row">
         <div className="stat-card">
           <div className="stat-label">Scheduled Agents</div>
           <div className="stat-value accent">{scheduledAgents.length}</div>

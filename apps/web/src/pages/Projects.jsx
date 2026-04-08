@@ -137,9 +137,14 @@ export default function Projects() {
   return (
     <div className="page">
       <div className="page-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <h1>Projects</h1>
-          <span className="text-secondary" style={{ fontSize: 13 }}>{liveCount}/{projects.length} live</span>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <h1>Projects</h1>
+            <span className="text-secondary" style={{ fontSize: 13 }}>{liveCount}/{projects.length} live</span>
+          </div>
+          <div className="page-subtitle">
+            Review tracked repositories, open the right actions quickly, and keep QA signal visible at the project level.
+          </div>
         </div>
         <div className="tab-bar">
           <button className={`tab-btn ${filter === '' ? 'active' : ''}`} onClick={() => setFilter('')}>All</button>

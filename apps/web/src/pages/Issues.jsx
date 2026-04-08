@@ -97,9 +97,14 @@ export default function Issues() {
   return (
     <div className="page">
       <div className="page-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <h1>Issues</h1>
-          {running > 0 && <span className="badge-live">{running} live</span>}
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <h1>Issues</h1>
+            {running > 0 && <span className="badge-live">{running} live</span>}
+          </div>
+          <div className="page-subtitle">
+            Turn natural-language requests into routed workflows, preview the plan, and run each task through the right AI team.
+          </div>
         </div>
         <div className="page-header-actions">
           <div className="tab-bar">

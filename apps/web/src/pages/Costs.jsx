@@ -28,7 +28,12 @@ export default function Costs() {
   return (
     <div className="page">
       <div className="page-header">
-        <h1>Costs</h1>
+        <div>
+          <h1>Costs</h1>
+          <div className="page-subtitle">
+            Compare budget allocation, actual spend, and remaining runway across the full runtime roster.
+          </div>
+        </div>
         <div className="tab-bar">
           {[['mtd', 'Month to Date'], ['7d', 'Last 7 Days'], ['30d', 'Last 30 Days']].map(([k, l]) => (
             <button key={k} className={`tab-btn ${period === k ? 'active' : ''}`} onClick={() => setPeriod(k)}>{l}</button>
@@ -36,7 +41,7 @@ export default function Costs() {
         </div>
       </div>
 
-      <div className="stats-row" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+      <div className="stats-row">
         <div className="stat-card">
           <div className="stat-label">Total Budget</div>
           <div className="stat-value">${totalBudget.toFixed(2)}</div>

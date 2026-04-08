@@ -93,7 +93,12 @@ export default function Activity() {
   return (
     <div className="page">
       <div className="page-header">
-        <h1>Activity</h1>
+        <div>
+          <h1>Activity</h1>
+          <div className="page-subtitle">
+            A chronological operating log across tasks, jobs, approvals, and governed executions.
+          </div>
+        </div>
         <span className="text-secondary" style={{ fontSize: 13 }}>{feed.length} events</span>
       </div>
 

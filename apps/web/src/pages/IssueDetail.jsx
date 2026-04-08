@@ -50,8 +50,14 @@ export default function IssueDetail() {
 
   return (
     <div className="page">
-      <div style={{ marginBottom: 16 }}>
-        <button className="btn btn-ghost btn-sm" onClick={() => navigate('/issues')}>Back to Issues</button>
+      <div className="page-header">
+        <div>
+          <h1>Issue Detail</h1>
+          <div className="page-subtitle">
+            Inspect execution context, previous runs, live output, and the exact audit trail behind this request.
+          </div>
+        </div>
+        <button className="btn btn-ghost" onClick={() => navigate('/issues')}>Back to Issues</button>
       </div>
 
       <div className="issue-detail">

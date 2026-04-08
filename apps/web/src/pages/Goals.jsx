@@ -34,7 +34,12 @@ export default function Goals() {
   return (
     <div className="page">
       <div className="page-header">
-        <h1>Goals</h1>
+        <div>
+          <h1>Goals</h1>
+          <div className="page-subtitle">
+            Keep company objectives, owners, and execution progress visible in one compact planning stack.
+          </div>
+        </div>
         <button className="btn btn-primary" onClick={() => setShowCreate(!showCreate)}>+ Goal</button>
       </div>
 

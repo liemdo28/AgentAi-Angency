@@ -54,7 +54,12 @@ export default function DevPanel() {
   return (
     <div className="page">
       <div className="page-header">
-        <h1>Dev Agent</h1>
+        <div>
+          <h1>Dev Agent</h1>
+          <div className="page-subtitle">
+            Launch focused engineering actions against tracked projects without leaving the control plane.
+          </div>
+        </div>
         <span className="text-secondary" style={{ fontSize: 13 }}>
           Run dev operations on your projects
         </span>
@@ -71,8 +76,8 @@ export default function DevPanel() {
               onChange={e => setProjectId(e.target.value)}
               style={{
                 width: '100%', padding: '8px 12px', borderRadius: 8,
-                border: '1px solid var(--border)', background: 'var(--bg-card)',
-                color: 'var(--text-primary)', fontSize: 13,
+                border: '1px solid var(--border)', background: 'var(--bg-surface2)',
+                color: 'var(--text)', fontSize: 13,
               }}
             >
               {projects.length === 0 && <option value="">Loading projects...</option>}
@@ -91,8 +96,8 @@ export default function DevPanel() {
               onChange={e => { setActionKey(e.target.value); setDescription(''); }}
               style={{
                 width: '100%', padding: '8px 12px', borderRadius: 8,
-                border: '1px solid var(--border)', background: 'var(--bg-card)',
-                color: 'var(--text-primary)', fontSize: 13,
+                border: '1px solid var(--border)', background: 'var(--bg-surface2)',
+                color: 'var(--text)', fontSize: 13,
               }}
             >
               {ACTIONS.map(a => (
@@ -114,8 +119,8 @@ export default function DevPanel() {
               rows={4}
               style={{
                 width: '100%', padding: '8px 12px', borderRadius: 8,
-                border: '1px solid var(--border)', background: 'var(--bg-card)',
-                color: 'var(--text-primary)', fontSize: 13, resize: 'vertical',
+                border: '1px solid var(--border)', background: 'var(--bg-surface2)',
+                color: 'var(--text)', fontSize: 13, resize: 'vertical',
                 fontFamily: 'inherit',
               }}
             />

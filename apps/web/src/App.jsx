@@ -22,7 +22,7 @@ import './styles.css';
 const ThemeContext = createContext({
   theme: 'dark',
   setTheme: () => {},
-  accent: '#6c5ce7',
+  accent: '#43b581',
   setAccent: () => {},
 });
 
@@ -30,7 +30,7 @@ export const useTheme = () => useContext(ThemeContext);
 
 function ThemeProvider({ children }) {
   const [theme, setThemeState] = useState(() => localStorage.getItem('agentai-theme') || 'dark');
-  const [accent, setAccentState] = useState(() => localStorage.getItem('agentai-accent') || '#6c5ce7');
+  const [accent, setAccentState] = useState(() => localStorage.getItem('agentai-accent') || '#43b581');
 
   const setTheme = useCallback((t) => {
     setThemeState(t);
@@ -78,21 +78,77 @@ const Icon = ({ name }) => {
 };
 
 // ── Page title from pathname ──────────────────────────────────
-const PAGE_TITLES = {
-  '/': 'Overview',
-  '/issues': 'Issues',
-  '/routines': 'Routines',
-  '/goals': 'Goals',
-  '/projects': 'Projects',
-  '/integration-ops': 'Integration Ops',
-  '/stores': 'Stores',
-  '/departments': 'Departments',
-  '/org': 'Org Chart',
-  '/costs': 'Costs',
-  '/activity': 'Activity',
-  '/approvals': 'Approvals',
-  '/dev': 'Dev Agent',
-  '/settings': 'Settings',
+const PAGE_META = {
+  '/': {
+    title: 'Overview',
+    section: 'Command Center',
+    subtitle: 'Live operating surface for workload, workforce, and company health.',
+  },
+  '/issues': {
+    title: 'Issues',
+    section: 'Work Queue',
+    subtitle: 'Create requests, inspect workflows, and drive agent execution from one place.',
+  },
+  '/routines': {
+    title: 'Routines',
+    section: 'Automation Cadence',
+    subtitle: 'See when teams and connectors are scheduled to run across the day.',
+  },
+  '/goals': {
+    title: 'Goals',
+    section: 'Company Planning',
+    subtitle: 'Track objectives, ownership, and execution progress across the agency.',
+  },
+  '/projects': {
+    title: 'Projects',
+    section: 'Project Control',
+    subtitle: 'Monitor projects, launch QA loops, and route operational follow-up.',
+  },
+  '/integration-ops': {
+    title: 'Integration Ops',
+    section: 'Edge Operations',
+    subtitle: 'Watch remote machines, download health, QuickBooks syncs, and dispatch actions.',
+  },
+  '/stores': {
+    title: 'Stores',
+    section: 'Location Network',
+    subtitle: 'Review brand locations, live marketing data, and store-level sync status.',
+  },
+  '/departments': {
+    title: 'Departments',
+    section: 'Governance',
+    subtitle: 'Manage departments, permissions, policy execution, and audit visibility.',
+  },
+  '/org': {
+    title: 'Org Chart',
+    section: 'Agent Workforce',
+    subtitle: 'Understand the runtime organization, capabilities, and current load.',
+  },
+  '/costs': {
+    title: 'Costs',
+    section: 'Spend Control',
+    subtitle: 'Compare budget, spend, and remaining runway across the active roster.',
+  },
+  '/activity': {
+    title: 'Activity',
+    section: 'Timeline',
+    subtitle: 'Review system events, approvals, executions, and operational history.',
+  },
+  '/approvals': {
+    title: 'Approvals',
+    section: 'Decision Queue',
+    subtitle: 'Review pending approvals and governed actions before they move forward.',
+  },
+  '/dev': {
+    title: 'Dev Agent',
+    section: 'Engineering Ops',
+    subtitle: 'Run guided development actions against tracked projects from the control plane.',
+  },
+  '/settings': {
+    title: 'Settings',
+    section: 'System Configuration',
+    subtitle: 'Tune appearance, orchestration defaults, and runtime environment details.',
+  },
 };
 
 const WORLD_CLOCKS = [
@@ -138,17 +194,25 @@ function ContentHeader() {
   const { theme, setTheme } = useTheme();
 
   const basePath = '/' + (location.pathname.split('/')[1] || '');
-  const title = PAGE_TITLES[basePath] || 'AgentAI';
+  const meta = PAGE_META[basePath] || {
+    title: 'AgentAI',
+    section: 'Control Plane',
+    subtitle: 'Operational visibility across your AI agency.',
+  };
 
   const toggleTheme = () => setTheme(theme === 'dark' ? 'light' : 'dark');
 
   return (
     <div className="content-header">
-      <span className="content-header-title">{title}</span>
+      <div className="content-header-copy">
+        <div className="content-header-section">{meta.section}</div>
+        <div className="content-header-title">{meta.title}</div>
+        <div className="content-header-subtitle">{meta.subtitle}</div>
+      </div>
       <div className="content-header-actions">
         <WorldClocks />
         <button onClick={toggleTheme} className="btn btn-ghost btn-sm">
-          {theme === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19'}
+          {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
         </button>
       </div>
     </div>
@@ -157,6 +221,8 @@ function ContentHeader() {
 
 function AppShell() {
   const [stats, setStats] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const location = useLocation();
 
   useEffect(() => {
     getStats().then(setStats).catch(() => {});
@@ -164,14 +230,52 @@ function AppShell() {
     return () => clearInterval(t);
   }, []);
 
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [location.pathname]);
+
   const running = stats?.tasks?.running ?? 0;
+  const pending = stats?.tasks?.pending ?? 0;
+  const failed = stats?.tasks?.failed ?? 0;
 
   return (
-    <div className="app">
-      <nav className="sidebar">
-        <div className="sidebar-logo">
-          <div className="sidebar-logo-icon">AI</div>
-          <span className="sidebar-logo-text">AgentAI</span>
+    <div className="app-shell">
+      <div
+        className={`sidebar-backdrop ${sidebarOpen ? 'is-open' : ''}`}
+        onClick={() => setSidebarOpen(false)}
+      />
+
+      <nav className={`sidebar ${sidebarOpen ? 'is-open' : ''}`}>
+        <div className="sidebar-top">
+          <div className="sidebar-logo">
+            <div className="sidebar-logo-icon">AI</div>
+            <div className="sidebar-logo-copy">
+              <span className="sidebar-logo-text">AgentAI</span>
+              <span className="sidebar-logo-sub">Control Plane</span>
+            </div>
+          </div>
+
+          <button className="sidebar-close" onClick={() => setSidebarOpen(false)} aria-label="Close navigation">
+            x
+          </button>
+        </div>
+
+        <div className="sidebar-status">
+          <div className="sidebar-status-title">Live System</div>
+          <div className="sidebar-status-grid">
+            <div className="sidebar-status-card">
+              <span className="sidebar-status-label">Running</span>
+              <strong>{running}</strong>
+            </div>
+            <div className="sidebar-status-card">
+              <span className="sidebar-status-label">Pending</span>
+              <strong>{pending}</strong>
+            </div>
+            <div className="sidebar-status-card">
+              <span className="sidebar-status-label">Failed</span>
+              <strong>{failed}</strong>
+            </div>
+          </div>
         </div>
 
         <div className="sidebar-section">
@@ -205,9 +309,21 @@ function AppShell() {
         <div className="sidebar-section">
           <NavLink to="/settings"><Icon name="settings" /> Settings</NavLink>
         </div>
+
+        <div className="sidebar-footer">
+          <div className="sidebar-footer-label">Agency Pulse</div>
+          <div className="sidebar-footer-value">
+            {running > 0 ? `${running} workflows moving` : 'No live runs right now'}
+          </div>
+        </div>
       </nav>
 
       <main className="content">
+        <div className="content-topbar">
+          <button className="nav-toggle btn btn-ghost btn-sm" onClick={() => setSidebarOpen(true)}>
+            Menu
+          </button>
+        </div>
         <ContentHeader />
         <Routes>
           <Route path="/" element={<Dashboard />} />

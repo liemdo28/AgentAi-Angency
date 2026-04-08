@@ -31,7 +31,12 @@ export default function Settings() {
   return (
     <div className="page">
       <div className="page-header">
-        <h1>Settings</h1>
+        <div>
+          <h1>Settings</h1>
+          <div className="page-subtitle">
+            Configure the visual system, runtime defaults, and infrastructure facts behind the control plane.
+          </div>
+        </div>
       </div>
 
       <div className="settings-grid">

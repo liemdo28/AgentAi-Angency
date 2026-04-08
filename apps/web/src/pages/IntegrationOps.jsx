@@ -195,7 +195,7 @@ export default function IntegrationOps() {
       <div className="page-header">
         <div>
           <h1>Integration Ops</h1>
-          <div className="text-secondary" style={{ fontSize: 13, marginTop: 4 }}>
+          <div className="page-subtitle">
             Live operating view for Toast download and QuickBooks sync health.
           </div>
         </div>

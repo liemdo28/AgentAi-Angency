@@ -455,7 +455,7 @@ export default function Departments() {
       <div className="page-header">
         <div>
           <h1>Department Governance</h1>
-          <div className="text-secondary" style={{ fontSize: 13 }}>
+          <div className="page-subtitle">
             Department master, store assignment, permission matrix, policy engine, and audit trail
           </div>
         </div>
@@ -464,7 +464,7 @@ export default function Departments() {
         </div>
       </div>
 
-      <div className="stats-row" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+      <div className="stats-row">
         <div className="stat-card"><div className="stat-label">Departments</div><div className="stat-value accent">{departments.length}</div></div>
         <div className="stat-card"><div className="stat-label">Active</div><div className="stat-value green">{departments.filter((d) => d.status === 'active').length}</div></div>
         <div className="stat-card"><div className="stat-label">Locked / Hidden</div><div className="stat-value yellow">{departments.filter((d) => ['locked', 'hidden'].includes(d.status)).length}</div></div>
