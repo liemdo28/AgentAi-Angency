@@ -1,17 +1,21 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getTask, listJobs, cancelTask } from '../api';
+import { getTask, listJobs, cancelTask, executeTask } from '../api';
 
 export default function IssueDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [task, setTask] = useState(null);
   const [jobs, setJobs] = useState([]);
+  const [executing, setExecuting] = useState(false);
+  const [execResult, setExecResult] = useState(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     getTask(id).then(setTask).catch(() => navigate('/issues'));
     listJobs(id).then(setJobs).catch(() => {});
-  }, [id]);
+  }, [id, navigate]);
+
+  useEffect(() => { load(); }, [load]);
 
   if (!task) return <div className="page"><div className="empty-state">Loading...</div></div>;
 
@@ -20,6 +24,30 @@ export default function IssueDetail() {
     setTask({ ...task, status: 'cancelled' });
   };
 
+  const handleExecute = async () => {
+    setExecuting(true);
+    setExecResult(null);
+    try {
+      const result = await executeTask(id);
+      setExecResult(result);
+      // Reload task + jobs to see updated status
+      load();
+    } catch (err) {
+      setExecResult({ status: 'error', output: err.message });
+    } finally {
+      setExecuting(false);
+    }
+  };
+
+  const canExecute = task.status === 'pending' || task.status === 'failed';
+  const canCancel = task.status === 'pending' || task.status === 'running';
+
+  // Parse context for extra info
+  let context = task.context_json || {};
+  if (typeof context === 'string') {
+    try { context = JSON.parse(context); } catch { context = {}; }
+  }
+
   return (
     <div className="page">
       <div style={{ marginBottom: 16 }}>
@@ -27,10 +55,21 @@ export default function IssueDetail() {
       </div>
 
       <div className="issue-detail">
+        {/* ── Main Panel ──────────────────────────── */}
         <div className="issue-detail-main">
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
             <div className={`issue-status-dot ${task.status}`} style={{ width: 20, height: 20 }} />
-            <h1 style={{ fontSize: 18, fontWeight: 700 }}>{task.title}</h1>
+            <h1 style={{ fontSize: 18, fontWeight: 700, flex: 1 }}>{task.title}</h1>
+            {canExecute && (
+              <button
+                className="btn btn-primary"
+                onClick={handleExecute}
+                disabled={executing}
+                style={{ flexShrink: 0 }}
+              >
+                {executing ? 'Running AI...' : 'Execute with AI'}
+              </button>
+            )}
           </div>
 
           {task.description && (
@@ -39,6 +78,94 @@ export default function IssueDetail() {
             </div>
           )}
 
+          {/* Phase info if part of a workflow */}
+          {context.phase_name && (
+            <div style={{
+              marginBottom: 16, padding: '8px 12px',
+              background: 'var(--accent-bg)', border: '1px solid rgba(108,92,231,0.2)',
+              borderRadius: 'var(--radius)', fontSize: 12,
+            }}>
+              <strong>Phase {context.phase}:</strong> {context.phase_name}
+              {context.original_request && (
+                <div className="text-secondary" style={{ marginTop: 4 }}>
+                  Original request: "{context.original_request}"
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── AI Result ─────────────────────────── */}
+          {execResult && (
+            <div style={{
+              marginBottom: 20, padding: 16,
+              background: execResult.status === 'success' ? 'var(--green-bg)' : 'var(--red-bg)',
+              border: `1px solid ${execResult.status === 'success' ? 'rgba(81,207,102,0.3)' : 'rgba(255,107,107,0.3)'}`,
+              borderRadius: 'var(--radius-lg)',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                <span style={{
+                  fontSize: 12, fontWeight: 600,
+                  color: execResult.status === 'success' ? 'var(--green)' : 'var(--red)',
+                }}>
+                  AI {execResult.status === 'success' ? 'Completed' : 'Failed'}
+                </span>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {execResult.provider && (
+                    <span className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                      via {execResult.provider}
+                    </span>
+                  )}
+                  {execResult.tokens_est > 0 && (
+                    <span className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                      ~{execResult.tokens_est} tokens
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div style={{
+                fontSize: 13, lineHeight: 1.7, color: 'var(--text)',
+                whiteSpace: 'pre-wrap', fontFamily: 'var(--font)',
+                maxHeight: 500, overflowY: 'auto',
+              }}>
+                {execResult.output}
+              </div>
+            </div>
+          )}
+
+          {/* ── Previous Job Results ──────────────── */}
+          {jobs.filter(j => j.output_json).map(j => {
+            let output = j.output_json;
+            if (typeof output === 'string') {
+              try { output = JSON.parse(output); } catch { output = null; }
+            }
+            if (!output || !output.output) return null;
+            return (
+              <div key={j.id} style={{
+                marginBottom: 12, padding: 14,
+                background: 'var(--bg-surface2)',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius)',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, fontWeight: 600 }}>
+                    Job result — {output.agent_title || j.agent_id}
+                  </span>
+                  <span className="mono text-dim" style={{ fontSize: 11 }}>
+                    {output.provider && `via ${output.provider}`}
+                    {output.tokens_est > 0 && ` ~${output.tokens_est} tok`}
+                  </span>
+                </div>
+                <div style={{
+                  fontSize: 13, lineHeight: 1.7, color: 'var(--text-secondary)',
+                  whiteSpace: 'pre-wrap', maxHeight: 300, overflowY: 'auto',
+                }}>
+                  {output.output}
+                </div>
+              </div>
+            );
+          })}
+
+          {/* ── Execution Trace ───────────────────── */}
           <div className="section-title mt-4">Execution Trace</div>
           <div className="trace-list">
             <div className="trace-item">
@@ -74,6 +201,7 @@ export default function IssueDetail() {
           </div>
         </div>
 
+        {/* ── Sidebar ────────────────────────────── */}
         <div className="issue-detail-sidebar">
           <div className="issue-prop">
             <div className="issue-prop-label">Status</div>
@@ -108,13 +236,48 @@ export default function IssueDetail() {
             <div className="issue-prop-value">{jobs.length} execution(s)</div>
           </div>
 
-          {(task.status === 'pending' || task.status === 'running') && (
-            <div className="mt-4">
+          {/* Context tools */}
+          {context.tools && context.tools.length > 0 && (
+            <div className="issue-prop">
+              <div className="issue-prop-label">Tools</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 4 }}>
+                {context.tools.map(t => (
+                  <span key={t} style={{
+                    fontSize: 10, padding: '2px 6px', borderRadius: 3,
+                    background: 'var(--bg-surface2)', color: 'var(--text-muted)',
+                  }}>{t}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Action buttons */}
+          <div className="mt-4" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {canExecute && (
+              <button
+                className="btn btn-primary"
+                style={{ width: '100%' }}
+                onClick={handleExecute}
+                disabled={executing}
+              >
+                {executing ? 'Running AI...' : 'Execute with AI'}
+              </button>
+            )}
+            {canCancel && (
               <button className="btn btn-danger" style={{ width: '100%' }} onClick={handleCancel}>
                 Cancel Issue
               </button>
-            </div>
-          )}
+            )}
+            {task.status === 'success' && (
+              <div style={{
+                textAlign: 'center', padding: 8,
+                background: 'var(--green-bg)', borderRadius: 'var(--radius)',
+                color: 'var(--green)', fontSize: 12, fontWeight: 600,
+              }}>
+                Completed
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

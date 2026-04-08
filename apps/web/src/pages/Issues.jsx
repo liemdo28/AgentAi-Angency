@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { listTasks, cancelTask, planSmartIssue, executeSmartIssue } from '../api';
+import { listTasks, cancelTask, planSmartIssue, executeSmartIssue, executeTask } from '../api';
 
 const PHASE_COLORS = { 1: 'var(--blue)', 2: 'var(--accent)', 3: 'var(--green)' };
 const PHASE_ICONS = { 1: '\u{1F50D}', 2: '\u26A1', 3: '\u{1F680}' };
@@ -56,7 +56,31 @@ export default function Issues() {
     load();
   };
 
+  const [executingGroup, setExecutingGroup] = useState(null); // goalId being executed
+  const [executingTask, setExecutingTask] = useState(null);   // single task id
+
   const running = tasks.filter(t => t.status === 'running').length;
+
+  const handleExecuteAll = async (goalId, goalTasks) => {
+    const pending = goalTasks.filter(t => t.status === 'pending' || t.status === 'failed');
+    if (pending.length === 0) return;
+    setExecutingGroup(goalId);
+    for (const t of pending) {
+      setExecutingTask(t.id);
+      try { await executeTask(t.id); } catch {}
+    }
+    setExecutingGroup(null);
+    setExecutingTask(null);
+    load();
+  };
+
+  const handleExecuteOne = async (e, taskId) => {
+    e.stopPropagation();
+    setExecutingTask(taskId);
+    try { await executeTask(taskId); } catch {}
+    setExecutingTask(null);
+    load();
+  };
 
   // Group tasks by goal for display
   const goalGroups = {};
@@ -240,6 +264,16 @@ export default function Issues() {
                     <div style={{ width: `${pct}%`, height: '100%', background: 'var(--green)', borderRadius: 2 }} />
                   </div>
                   <span className="mono text-dim" style={{ fontSize: 11 }}>{pct}%</span>
+                  {done < total && (
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={() => handleExecuteAll(goalId, goalTasks)}
+                      disabled={executingGroup === goalId}
+                      style={{ marginLeft: 4 }}
+                    >
+                      {executingGroup === goalId ? `Running ${executingTask?.slice(0,4)}...` : `Execute All (${total - done})`}
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -262,6 +296,16 @@ export default function Issues() {
                     <div className="issue-meta">
                       <span className="issue-agent">{t.assigned_agent_id}</span>
                       <span className={`badge ${t.status}`}>{t.status}</span>
+                      {(t.status === 'pending' || t.status === 'failed') && (
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={e => handleExecuteOne(e, t.id)}
+                          disabled={executingTask === t.id}
+                          style={{ marginLeft: 2 }}
+                        >
+                          {executingTask === t.id ? 'AI...' : 'Run'}
+                        </button>
+                      )}
                       {(t.status === 'pending' || t.status === 'running') && (
                         <button className="btn btn-danger btn-sm" onClick={e => handleCancel(e, t.id)}>Cancel</button>
                       )}
