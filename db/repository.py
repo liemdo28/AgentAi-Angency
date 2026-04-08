@@ -653,6 +653,14 @@ class ControlPlaneDB:
         finally:
             conn.close()
 
+    def get_goal(self, goal_id: str) -> Optional[dict]:
+        conn = self._conn()
+        try:
+            row = conn.execute("SELECT * FROM goals WHERE id = ?", (goal_id,)).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
     # ── agents ────────────────────────────────────────────────────────
 
     def register_agent(self, agent_id: str, role: str, agent_type: str,
@@ -738,6 +746,22 @@ class ControlPlaneDB:
                     (limit,),
                 ).fetchall()
             return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def list_tasks_by_goal(self, goal_id: str, limit: int = 200) -> List[dict]:
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM cp_tasks WHERE goal_id = ? ORDER BY created_at ASC LIMIT ?",
+                (goal_id, limit),
+            ).fetchall()
+            results = []
+            for row in rows:
+                item = dict(row)
+                item["context_json"] = json.loads(item.get("context_json") or "{}")
+                results.append(item)
+            return results
         finally:
             conn.close()
 

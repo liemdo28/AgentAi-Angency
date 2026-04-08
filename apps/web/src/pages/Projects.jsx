@@ -1,49 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { executeSmartIssue, listProjects, runProjectQaSimulation } from '../api';
+import { executeSmartIssue, listProjects, runProjectLiveQa, runProjectQaSimulation } from '../api';
 
-const TYPE_COLORS = {
-  python: '#3572A5',
-  node: '#68A063',
-  html: '#E34C26',
-  php: '#4F5D95',
-};
-
-const CATEGORY_LABELS = {
-  core: 'Core',
-  website: 'Website',
-  operations: 'Operations',
-  analytics: 'Analytics',
-  reviews: 'Reviews',
-};
+const QA_STORAGE_KEY = 'agentai.projects.qaRuns.v2';
+const TYPE_COLORS = { python: '#3572A5', node: '#68A063', html: '#E34C26', php: '#4F5D95' };
+const CATEGORY_LABELS = { core: 'Core', website: 'Website', operations: 'Operations', analytics: 'Analytics', reviews: 'Reviews' };
 
 function getStatusInfo(project) {
-  const s = (project.status || '').toLowerCase();
-  if (s === 'online') {
-    return { cls: 'status-running', label: 'Live', color: 'var(--green)' };
-  }
-  if (s === 'running') {
-    return { cls: 'status-running', label: 'Running', color: 'var(--green)' };
-  }
-  if (s === 'idle' || s === 'stopped') {
-    return { cls: 'status-idle', label: 'Idle', color: 'var(--text-muted)' };
-  }
-  return { cls: 'status-offline', label: 'Offline', color: 'var(--red)' };
-}
-
-function truncatePath(p, maxLen = 40) {
-  if (!p || p.length <= maxLen) return p;
-  return '...' + p.slice(-(maxLen - 3));
-}
-
-function formatDate(value) {
-  if (!value) return '-';
-  return value.slice(0, 10);
-}
-
-function formatTime(value) {
-  if (!value) return '-';
-  return value.replace('T', ' ').replace('Z', ' UTC').slice(0, 19);
+  const status = (project.status || '').toLowerCase();
+  if (status === 'online') return { cls: 'status-running', label: 'Live' };
+  if (status === 'running') return { cls: 'status-running', label: 'Running' };
+  if (status === 'idle' || status === 'stopped') return { cls: 'status-idle', label: 'Idle' };
+  return { cls: 'status-offline', label: 'Offline' };
 }
 
 function formatScore(value) {
@@ -51,30 +19,77 @@ function formatScore(value) {
   return `${value.toFixed(2)}/10`;
 }
 
+function formatDate(value) {
+  return value ? value.slice(0, 10) : '-';
+}
+
+function formatTime(value) {
+  return value ? value.replace('T', ' ').replace('Z', ' UTC').slice(0, 19) : '-';
+}
+
+function loadStoredQaRuns() {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(QA_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function dedupeSuggestions(items) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = item?.id || item?.title;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function loopBadge(loop) {
+  const status = loop?.status;
+  if (status === 'passed') return { cls: 'success', label: 'PASS' };
+  if (status === 'escalated') return { cls: 'failed', label: 'CEO' };
+  if (status === 'retesting') return { cls: 'pending', label: 'RETEST' };
+  if (status === 'fixing') return { cls: 'pending', label: 'FIXING' };
+  if (status === 'failed') return { cls: 'failed', label: 'FAILED' };
+  return { cls: 'pending', label: 'QUEUE' };
+}
+
+function summaryStats(project, opsProfile, signalCount) {
+  const items = [
+    { label: 'Category', value: CATEGORY_LABELS[project.category] || project.category || 'General' },
+    { label: 'Type', value: project.type || 'generic' },
+    { label: 'Profile', value: (opsProfile.kind || 'generic').replace(/_/g, ' ') },
+    { label: 'Signals', value: String(signalCount) },
+  ];
+  if (project.latency_ms != null) items.push({ label: 'Latency', value: `${project.latency_ms}ms` });
+  else if (project.port) items.push({ label: 'Port', value: String(project.port) });
+  else if (project.branch) items.push({ label: 'Branch', value: project.branch });
+  return items;
+}
+
 export default function Projects() {
   const [projects, setProjects] = useState([]);
   const [filter, setFilter] = useState('');
   const [busySuggestionId, setBusySuggestionId] = useState('');
-  const [successMsg, setSuccessMsg] = useState(null); // {projectId, text, taskCount, phases}
-  const [qaRuns, setQaRuns] = useState({});
+  const [successMsg, setSuccessMsg] = useState(null);
+  const [qaRuns, setQaRuns] = useState(loadStoredQaRuns);
+  const [liveQaRuns, setLiveQaRuns] = useState({});
   const navigate = useNavigate();
 
   const load = () => listProjects().then(setProjects).catch(() => {});
 
+  useEffect(() => { load(); }, []);
   useEffect(() => {
-    load();
-  }, []);
+    if (typeof window !== 'undefined') window.localStorage.setItem(QA_STORAGE_KEY, JSON.stringify(qaRuns));
+  }, [qaRuns]);
 
-  const categories = [...new Set(projects.map((p) => p.category))];
-  const filtered = filter ? projects.filter((p) => p.category === filter) : projects;
-
-  const countByStatus = (label) => projects.filter((p) => getStatusInfo(p).label === label).length;
-  const liveCount = projects.filter(p => {
-    const s = (p.status || '').toLowerCase();
-    return s === 'online' || s === 'running';
-  }).length;
-  const idleCount = countByStatus('Idle');
-  const offlineCount = countByStatus('Offline');
+  const categories = [...new Set(projects.map((project) => project.category))];
+  const filtered = filter ? projects.filter((project) => project.category === filter) : projects;
+  const countByStatus = (label) => projects.filter((project) => getStatusInfo(project).label === label).length;
+  const liveCount = projects.filter((project) => ['online', 'running'].includes((project.status || '').toLowerCase())).length;
 
   const handleSuggestion = async (suggestion, project) => {
     if (!suggestion?.prompt) return;
@@ -88,36 +103,30 @@ export default function Projects() {
           max_iterations: 100,
           pass_threshold: 8.5,
         });
-        setQaRuns((current) => ({
-          ...current,
-          [project.id]: result,
-        }));
+        setQaRuns((current) => ({ ...current, [project.id]: result }));
         return;
       }
-
+      if (suggestion.action_type === 'qa_live') {
+        const result = await runProjectLiveQa(project.id, {
+          pass_threshold: 8.5,
+          timeout_ms: 15000,
+          auto_create_fix_tasks: true,
+          max_retest_cycles: 5,
+        });
+        setLiveQaRuns((current) => ({ ...current, [project.id]: result }));
+        load();
+        return;
+      }
       const result = await executeSmartIssue(suggestion.prompt);
-      setSuccessMsg({
-        projectId: project.id,
-        text: suggestion.title,
-        taskCount: result.total_created || 0,
-        phases: result.total_phases || 0,
-      });
-      // Auto-dismiss after 8 seconds
+      setSuccessMsg({ projectId: project.id, text: suggestion.title, taskCount: result.total_created || 0, phases: result.total_phases || 0 });
       setTimeout(() => setSuccessMsg(null), 8000);
     } catch (error) {
       if (suggestion.action_type === 'qa_simulation') {
-        setQaRuns((current) => ({
-          ...current,
-          [project.id]: { error: error.message || 'Simulation failed.' },
-        }));
+        setQaRuns((current) => ({ ...current, [project.id]: { error: error.message || 'Simulation failed.' } }));
+      } else if (suggestion.action_type === 'qa_live') {
+        setLiveQaRuns((current) => ({ ...current, [project.id]: { error: error.message || 'Live browser QA failed.' } }));
       } else {
-        setSuccessMsg({
-          projectId: project.id,
-          text: `Error: ${error.message}`,
-          taskCount: 0,
-          phases: 0,
-          isError: true,
-        });
+        setSuccessMsg({ projectId: project.id, text: `Error: ${error.message}`, taskCount: 0, phases: 0, isError: true });
         setTimeout(() => setSuccessMsg(null), 5000);
       }
     } finally {
@@ -130,404 +139,275 @@ export default function Projects() {
       <div className="page-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <h1>Projects</h1>
-          <span className="text-secondary" style={{ fontSize: 13 }}>
-            {liveCount}/{projects.length} live
-          </span>
+          <span className="text-secondary" style={{ fontSize: 13 }}>{liveCount}/{projects.length} live</span>
         </div>
         <div className="tab-bar">
-          <button className={`tab-btn ${filter === '' ? 'active' : ''}`} onClick={() => setFilter('')}>
-            All
-          </button>
-          {categories.map((c) => (
-            <button key={c} className={`tab-btn ${filter === c ? 'active' : ''}`} onClick={() => setFilter(c)}>
-              {CATEGORY_LABELS[c] || c}
+          <button className={`tab-btn ${filter === '' ? 'active' : ''}`} onClick={() => setFilter('')}>All</button>
+          {categories.map((category) => (
+            <button key={category} className={`tab-btn ${filter === category ? 'active' : ''}`} onClick={() => setFilter(category)}>
+              {CATEGORY_LABELS[category] || category}
             </button>
           ))}
         </div>
       </div>
 
-      <div className="stats-row" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-        <div className="stat-card">
-          <div className="stat-label">Live / Running</div>
-          <div className="stat-value green">{liveCount}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Idle</div>
-          <div className="stat-value">{idleCount}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Offline</div>
-          <div className="stat-value red">{offlineCount}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Uncommitted</div>
-          <div className="stat-value yellow">{projects.filter((p) => p.dirty).length}</div>
-        </div>
+      <div className="stats-row projects-stats-row">
+        <div className="stat-card"><div className="stat-label">Live / Running</div><div className="stat-value green">{liveCount}</div></div>
+        <div className="stat-card"><div className="stat-label">Idle</div><div className="stat-value">{countByStatus('Idle')}</div></div>
+        <div className="stat-card"><div className="stat-label">Offline</div><div className="stat-value red">{countByStatus('Offline')}</div></div>
+        <div className="stat-card"><div className="stat-label">Uncommitted</div><div className="stat-value yellow">{projects.filter((project) => project.dirty).length}</div></div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))', gap: 12 }}>
-        {filtered.map((p) => {
-          const status = getStatusInfo(p);
-          const ops = p.integration_ops;
-          const opsProfile = p.ops_profile || {};
-          const latestDownload = ops?.latest_downloads || [];
-          const latestQbSync = ops?.latest_qb_sync || [];
-          const suggestions = ops?.ai_suggestions || [];
+      <div className="projects-grid">
+        {filtered.map((project) => {
+          const status = getStatusInfo(project);
+          const ops = project.integration_ops;
+          const opsProfile = project.ops_profile || {};
           const profileSignals = opsProfile.signals || [];
-          const profileSuggestions = opsProfile.suggestions || [];
-          const mergedSuggestions = [...suggestions, ...profileSuggestions.filter((item) => item.action_type === 'qa_simulation')];
-          const qaRun = qaRuns[p.id];
+          const suggestions = dedupeSuggestions([...(ops?.ai_suggestions || []), ...(opsProfile.suggestions || [])]);
+          const primarySuggestions = suggestions.slice(0, 2);
+          const secondarySuggestions = suggestions.slice(2);
+          const qaRun = qaRuns[project.id];
+          const liveQaRun = liveQaRuns[project.id];
+          const liveQaLoop = liveQaRun?.loop_summary || project.live_qa_loop;
+          const liveBadge = loopBadge(liveQaLoop);
 
           return (
-            <div key={p.id} className="org-card project-card" style={{ textAlign: 'left', padding: 18 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 10 }}>
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 2 }}>{p.name}</div>
-                  <div className="text-dim" style={{ fontSize: 12 }}>{p.id}</div>
+            <article key={project.id} className="org-card project-card" style={{ textAlign: 'left', padding: 18 }}>
+              <div className="project-head">
+                <div className="project-head-copy">
+                  <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 2 }}>{project.name}</div>
+                  <div className="text-dim" style={{ fontSize: 12 }}>{project.id}</div>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {p.latency_ms != null && (
-                    <span className="mono" style={{ fontSize: 10, color: 'var(--text-muted)' }}>{p.latency_ms}ms</span>
-                  )}
+                <div className="project-head-status">
+                  {project.latency_ms != null && <span className="mono project-latency">{project.latency_ms}ms</span>}
                   <span className={status.cls}>{status.label}</span>
                 </div>
               </div>
 
-              {/* Live URL link */}
-              {p.url && (p.status === 'online' || p.status === 'running') && (
-                <div style={{ marginBottom: 8 }}>
-                  <a href={p.url} target="_blank" rel="noopener noreferrer" style={{
-                    fontSize: 11, color: 'var(--green)', textDecoration: 'none',
-                    display: 'inline-flex', alignItems: 'center', gap: 4,
-                  }}>
-                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--green)', display: 'inline-block', animation: 'pulse 2s infinite' }} />
-                    {p.url.replace('https://', '')}
-                  </a>
-                </div>
+              {project.url && (
+                <a href={project.url} target="_blank" rel="noopener noreferrer" className={`project-url ${status.label === 'Live' || status.label === 'Running' ? 'is-live' : ''}`}>
+                  <span className="project-url-dot" />
+                  <span>{project.url.replace(/^https?:\/\//, '')}</span>
+                </a>
               )}
 
-              <div className="text-secondary" style={{ fontSize: 12, marginBottom: 12, lineHeight: 1.5 }}>
-                {p.description}
-              </div>
+              <div className="text-secondary" style={{ fontSize: 12, lineHeight: 1.5 }}>{project.description}</div>
 
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 10 }}>
-                {p.tech?.map((t) => (
-                  <span
-                    key={t}
-                    style={{
-                      fontSize: 10,
-                      padding: '2px 6px',
-                      borderRadius: 3,
-                      background: 'var(--bg-surface2)',
-                      color: 'var(--text-secondary)',
-                      border: '1px solid var(--border)',
-                    }}
-                  >
-                    {t}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {project.tech?.map((tech) => (
+                  <span key={tech} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 3, background: 'var(--bg-surface2)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+                    {tech}
                   </span>
                 ))}
               </div>
 
-              <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {p.local_path && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-                    <span className="text-dim">Path</span>
-                    <span className="mono" title={p.local_path} style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {truncatePath(p.local_path)}
-                    </span>
+              <div className="project-summary-grid">
+                {summaryStats(project, opsProfile, profileSignals.length).map((item) => (
+                  <div key={`${project.id}-${item.label}`} className="project-mini-stat">
+                    <div className="project-mini-label">{item.label}</div>
+                    <div className="project-mini-value">{item.value}</div>
                   </div>
-                )}
-                {p.branch && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-                    <span className="text-dim">Branch</span>
-                    <span className="mono" style={{ color: 'var(--accent)' }}>{p.branch}</span>
-                  </div>
-                )}
-                {p.last_commit && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-                    <span className="text-dim">Latest</span>
-                    <span className="text-secondary" style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {p.last_commit}
-                    </span>
-                  </div>
-                )}
-                {p.last_commit_date && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-                    <span className="text-dim">Date</span>
-                    <span className="text-secondary">{formatDate(p.last_commit_date)}</span>
-                  </div>
-                )}
-                {p.dirty && (
-                  <div style={{ fontSize: 11, color: 'var(--yellow)', marginTop: 2 }}>
-                    Uncommitted changes
-                  </div>
-                )}
-                {p.port && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-                    <span className="text-dim">Port</span>
-                    <span className="mono">{p.port}</span>
-                  </div>
-                )}
-                {p.github && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-                    <span className="text-dim">GitHub</span>
-                    <a
-                      href={`https://github.com/${p.github}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{ color: 'var(--blue)', textDecoration: 'none', fontFamily: 'var(--mono)', fontSize: 12 }}
-                    >
-                      {p.github.includes('/') ? p.github.split('/').pop() : p.github}
-                    </a>
-                  </div>
-                )}
+                ))}
               </div>
 
-              {ops && (
-                <div className="project-ops">
-                  <div className="project-ops-grid">
-                    <div className="project-mini-stat">
-                      <div className="project-mini-label">Last Download</div>
-                      <div className="project-mini-value">{formatDate(ops.summary?.last_download_at)}</div>
-                    </div>
-                    <div className="project-mini-stat">
-                      <div className="project-mini-label">Last QB Sync</div>
-                      <div className="project-mini-value">{formatDate(ops.summary?.last_qb_sync_at)}</div>
-                    </div>
-                    <div className="project-mini-stat">
-                      <div className="project-mini-label">Download Gaps</div>
-                      <div className="project-mini-value">{ops.summary?.download_gap_count ?? 0}</div>
-                    </div>
-                    <div className="project-mini-stat">
-                      <div className="project-mini-label">QB Gaps</div>
-                      <div className="project-mini-value">{ops.summary?.qb_gap_count ?? 0}</div>
-                    </div>
+              <div className="project-section-title">Primary Actions</div>
+              <div className="project-suggestion-list">
+                {primarySuggestions.length === 0 && <div className="project-feed-empty">No priority actions right now.</div>}
+                {primarySuggestions.map((suggestion) => (
+                  <div key={suggestion.id} className="project-suggestion-card">
+                    <div className="project-feed-title">{suggestion.title}</div>
+                    <div className="project-feed-sub">{suggestion.description}</div>
+                    <button className="btn btn-ghost btn-sm" onClick={() => handleSuggestion(suggestion, project)} disabled={busySuggestionId === suggestion.id}>
+                      {busySuggestionId === suggestion.id ? (suggestion.action_type === 'qa_simulation' || suggestion.action_type === 'qa_live' ? 'Running...' : 'Creating...') : suggestion.action_label}
+                    </button>
                   </div>
+                ))}
+              </div>
 
-                  <div className="project-section-title">Latest Download Activity</div>
-                  <div className="project-feed">
-                    {latestDownload.length === 0 && <div className="project-feed-empty">No successful downloads found yet.</div>}
-                    {latestDownload.map((item) => (
-                      <div key={`${item.store}-${item.report_key}-${item.business_date}`} className="project-feed-row">
-                        <div>
-                          <div className="project-feed-title">{item.store} · {item.report_label}</div>
-                          <div className="project-feed-sub">{item.business_date || 'Unknown date'} · {formatTime(item.saved_at)}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+              <div className="project-inline-actions">
+                <button className="btn btn-ghost btn-sm" onClick={() => navigate('/issues')}>Open Issues</button>
+                {project.github && <a href={`https://github.com/${project.github}`} target="_blank" rel="noopener noreferrer" className="project-inline-link">Open Repo</a>}
+              </div>
 
-                  <div className="project-section-title">Latest QB Sync Activity</div>
-                  <div className="project-feed">
-                    {latestQbSync.length === 0 && <div className="project-feed-empty">No successful QB sync runs found yet.</div>}
-                    {latestQbSync.map((item) => (
-                      <div key={`${item.store}-${item.source_name}-${item.date}`} className="project-feed-row">
-                        <div>
-                          <div className="project-feed-title">{item.store} · {item.source_name || 'Unknown'}</div>
-                          <div className="project-feed-sub">{item.date || 'Unknown date'} · {formatTime(item.completed_at)}</div>
-                        </div>
-                        <span className="badge success">{item.status}</span>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="project-section-title">AI Next Actions</div>
-                  <div className="project-suggestion-list">
-                    {mergedSuggestions.length === 0 && <div className="project-feed-empty">No suggestions right now.</div>}
-                    {mergedSuggestions.map((suggestion) => (
-                      <div key={suggestion.id} className="project-suggestion-card">
-                        <div className="project-feed-title">{suggestion.title}</div>
-                        <div className="project-feed-sub">{suggestion.description}</div>
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => handleSuggestion(suggestion, p)}
-                          disabled={busySuggestionId === suggestion.id}
-                        >
-                          {busySuggestionId === suggestion.id
-                            ? suggestion.action_type === 'qa_simulation' ? 'Running...' : 'Creating...'
-                            : suggestion.action_label}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+              {successMsg && successMsg.projectId === project.id && (
+                <div style={{ padding: '8px 12px', borderRadius: 'var(--radius)', background: successMsg.isError ? 'var(--red-bg)' : 'var(--green-bg)', border: `1px solid ${successMsg.isError ? 'rgba(255,107,107,0.3)' : 'rgba(81,207,102,0.3)'}`, fontSize: 12, color: successMsg.isError ? 'var(--red)' : 'var(--green)' }}>
+                  {successMsg.isError ? successMsg.text : `Workflow created - ${successMsg.taskCount} tasks across ${successMsg.phases} phases.`}
                 </div>
               )}
 
-              {!ops && opsProfile && (
-                <div className="project-ops">
-                  <div className="project-ops-grid">
-                    <div className="project-mini-stat">
-                      <div className="project-mini-label">Profile</div>
-                      <div className="project-mini-value">{opsProfile.kind || '-'}</div>
+              {liveQaLoop && (
+                <details className="project-panel" open>
+                  <summary className="project-panel-summary">
+                    <div>
+                      <div className="project-panel-title">Live QA Loop</div>
+                      <div className="project-panel-sub">Current browser QA status, retest cycles, and escalation path.</div>
                     </div>
-                    <div className="project-mini-stat">
-                      <div className="project-mini-label">Signals</div>
-                      <div className="project-mini-value">{profileSignals.length}</div>
+                    <span className={`badge ${liveBadge.cls}`}>{liveBadge.label}</span>
+                  </summary>
+                  <div className="project-panel-body">
+                    <div className="project-ops-grid">
+                      <div className="project-mini-stat"><div className="project-mini-label">Status</div><div className="project-mini-value">{liveQaLoop.label}</div></div>
+                      <div className="project-mini-stat"><div className="project-mini-label">Retests</div><div className="project-mini-value">{liveQaLoop.retest_attempts}/{liveQaLoop.max_retest_cycles}</div></div>
+                      <div className="project-mini-stat"><div className="project-mini-label">Pending</div><div className="project-mini-value">{liveQaLoop.pending_tasks}</div></div>
+                      <div className="project-mini-stat"><div className="project-mini-label">Escalated</div><div className="project-mini-value">{liveQaLoop.escalated ? 'YES' : 'NO'}</div></div>
                     </div>
+                    {liveQaLoop.latest_retest && (
+                      <div className="project-feed">
+                        <div className="project-feed-row">
+                          <div>
+                            <div className="project-feed-title">Latest retest - Attempt {liveQaLoop.latest_retest.attempt || liveQaLoop.retest_attempts}</div>
+                            <div className="project-feed-sub">{liveQaLoop.latest_retest.summary || 'Retest result stored in the loop.'}</div>
+                          </div>
+                          <span className={`badge ${liveQaLoop.latest_retest.passed ? 'success' : 'pending'}`}>{formatScore(liveQaLoop.latest_retest.score)}</span>
+                        </div>
+                      </div>
+                    )}
+                    {(liveQaLoop.active_tasks || []).length > 0 && (
+                      <div className="project-feed">
+                        {liveQaLoop.active_tasks.map((task) => (
+                          <div key={task.id} className="project-feed-row">
+                            <div>
+                              <div className="project-feed-title">{task.title}</div>
+                              <div className="project-feed-sub">{task.assigned_agent_id}</div>
+                            </div>
+                            <span className={`badge ${task.status === 'success' ? 'success' : task.status === 'failed' ? 'failed' : 'pending'}`}>{task.status}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
+                </details>
+              )}
 
-                  <div className="project-section-title">Ops Signals</div>
+              {liveQaRun && (
+                <details className="project-panel" open>
+                  <summary className="project-panel-summary">
+                    <div>
+                      <div className="project-panel-title">Latest Live QA Run</div>
+                      <div className="project-panel-sub">Immediate browser run result before refresh.</div>
+                    </div>
+                    <span className={`badge ${liveQaRun.error ? 'failed' : liveQaRun.passed ? 'success' : 'failed'}`}>{liveQaRun.error ? 'error' : liveQaRun.passed ? 'pass' : 'retry'}</span>
+                  </summary>
+                  <div className="project-panel-body">
+                    {liveQaRun.error ? (
+                      <div className="project-feed-empty" style={{ color: 'var(--red)' }}>Live browser QA failed: {liveQaRun.error}</div>
+                    ) : (
+                      <>
+                        <div className="project-ops-grid">
+                          <div className="project-mini-stat"><div className="project-mini-label">Live QA Score</div><div className="project-mini-value">{formatScore(liveQaRun.final_score)}</div></div>
+                          <div className="project-mini-stat"><div className="project-mini-label">Gate</div><div className="project-mini-value">{liveQaRun.passed ? 'PASS' : 'REMEDIATE'}</div></div>
+                          <div className="project-mini-stat"><div className="project-mini-label">Target</div><div className="project-mini-value">{liveQaRun.target_url ? liveQaRun.target_url.replace(/^https?:\/\//, '') : '-'}</div></div>
+                          <div className="project-mini-stat"><div className="project-mini-label">Followup</div><div className="project-mini-value">{liveQaRun.followup_goal ? 'Created' : 'Not needed'}</div></div>
+                        </div>
+                        <div className="project-feed">
+                          <div className="project-feed-row">
+                            <div>
+                              <div className="project-feed-title">{liveQaRun.summary}</div>
+                              <div className="project-feed-sub">{(liveQaRun.profiles || []).map((profile) => profile.name).join(' - ') || 'No viewport profiles completed'}</div>
+                            </div>
+                            <span className={`badge ${liveQaRun.passed ? 'success' : 'failed'}`}>{liveQaRun.passed ? 'pass' : 'retry'}</span>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </details>
+              )}
+
+              {qaRun && (
+                <details className="project-panel" open>
+                  <summary className="project-panel-summary">
+                    <div>
+                      <div className="project-panel-title">QA Simulation</div>
+                      <div className="project-panel-sub">Tester score, release gate, findings, and recent loops.</div>
+                    </div>
+                    <span className={`badge ${qaRun.error ? 'failed' : qaRun.passed ? 'success' : 'failed'}`}>{qaRun.error ? 'error' : qaRun.passed ? 'pass' : 'retry'}</span>
+                  </summary>
+                  <div className="project-panel-body">
+                    {qaRun.error ? (
+                      <div className="project-feed-empty" style={{ color: 'var(--red)' }}>QA simulation failed: {qaRun.error}</div>
+                    ) : (
+                      <>
+                        <div className="project-ops-grid">
+                          <div className="project-mini-stat"><div className="project-mini-label">Tester Score</div><div className="project-mini-value">{formatScore(qaRun.final_score)}</div></div>
+                          <div className="project-mini-stat"><div className="project-mini-label">Loops Used</div><div className="project-mini-value">{qaRun.iterations_run}/{qaRun.max_iterations}</div></div>
+                          <div className="project-mini-stat"><div className="project-mini-label">Tester Gate</div><div className="project-mini-value">{qaRun.passed ? 'PASS' : 'RETRY'}</div></div>
+                          <div className="project-mini-stat"><div className="project-mini-label">Handoff</div><div className="project-mini-value">{qaRun.final_report?.handoff_target === 'CEO -> user/admin' ? 'CEO' : 'Rework'}</div></div>
+                        </div>
+                        <div className="project-feed">
+                          <div className="project-feed-row">
+                            <div>
+                              <div className="project-feed-title">{qaRun.final_report?.summary}</div>
+                              <div className="project-feed-sub">{qaRun.ceo_summary}</div>
+                            </div>
+                            <span className={`badge ${qaRun.passed ? 'success' : 'failed'}`}>{qaRun.final_report?.qa_gate}</span>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </details>
+              )}
+
+              <details className="project-panel">
+                <summary className="project-panel-summary">
+                  <div>
+                    <div className="project-panel-title">Project Context</div>
+                    <div className="project-panel-sub">Workspace info, ops signals, activity, and more actions.</div>
+                  </div>
+                  <span className="project-panel-caret">Details</span>
+                </summary>
+                <div className="project-panel-body">
                   <div className="project-feed">
-                    {profileSignals.length === 0 && <div className="project-feed-empty">No signals yet.</div>}
+                    {project.local_path && (
+                      <div className="project-feed-row">
+                        <div>
+                          <div className="project-feed-title">Path</div>
+                          <div className="project-feed-sub">{project.local_path}</div>
+                        </div>
+                      </div>
+                    )}
+                    {project.last_commit && (
+                      <div className="project-feed-row">
+                        <div>
+                          <div className="project-feed-title">Latest Commit</div>
+                          <div className="project-feed-sub">{project.last_commit} - {formatDate(project.last_commit_date)}</div>
+                        </div>
+                      </div>
+                    )}
                     {profileSignals.map((item) => (
-                      <div key={`${p.id}-${item.label}`} className="project-feed-row">
+                      <div key={`${project.id}-${item.label}`} className="project-feed-row">
                         <div>
                           <div className="project-feed-title">{item.label}</div>
                           <div className="project-feed-sub">{item.value}</div>
                         </div>
-                        <span className={`badge ${item.status === 'ok' ? 'success' : item.status === 'warning' ? 'pending' : 'failed'}`}>
-                          {item.status}
-                        </span>
+                        <span className={`badge ${item.status === 'ok' ? 'success' : item.status === 'warning' ? 'pending' : 'failed'}`}>{item.status}</span>
                       </div>
                     ))}
-                  </div>
-
-                  <div className="project-section-title">AI Next Actions</div>
-                  <div className="project-suggestion-list">
-                    {profileSuggestions.length === 0 && <div className="project-feed-empty">No suggestions right now.</div>}
-                    {profileSuggestions.map((suggestion) => (
+                    {(ops?.latest_downloads || []).slice(0, 2).map((item) => (
+                      <div key={`${item.store}-${item.report_key}-${item.business_date}`} className="project-feed-row">
+                        <div>
+                          <div className="project-feed-title">{item.store} - {item.report_label}</div>
+                          <div className="project-feed-sub">{item.business_date || 'Unknown date'} - {formatTime(item.saved_at)}</div>
+                        </div>
+                      </div>
+                    ))}
+                    {(secondarySuggestions || []).map((suggestion) => (
                       <div key={suggestion.id} className="project-suggestion-card">
                         <div className="project-feed-title">{suggestion.title}</div>
                         <div className="project-feed-sub">{suggestion.description}</div>
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => handleSuggestion(suggestion, p)}
-                          disabled={busySuggestionId === suggestion.id}
-                        >
-                          {busySuggestionId === suggestion.id
-                            ? suggestion.action_type === 'qa_simulation' ? 'Running...' : 'Creating...'
-                            : suggestion.action_label}
+                        <button className="btn btn-ghost btn-sm" onClick={() => handleSuggestion(suggestion, project)} disabled={busySuggestionId === suggestion.id}>
+                          {busySuggestionId === suggestion.id ? (suggestion.action_type === 'qa_simulation' || suggestion.action_type === 'qa_live' ? 'Running...' : 'Creating...') : suggestion.action_label}
                         </button>
                       </div>
                     ))}
                   </div>
                 </div>
-              )}
+              </details>
 
-              {qaRun && (
-                <div className="project-ops">
-                  {qaRun.error ? (
-                    <div className="project-feed-empty" style={{ color: 'var(--red)' }}>
-                      QA simulation failed: {qaRun.error}
-                    </div>
-                  ) : (
-                    <>
-                      <div className="project-ops-grid">
-                        <div className="project-mini-stat">
-                          <div className="project-mini-label">Tester Score</div>
-                          <div className="project-mini-value">{formatScore(qaRun.final_score)}</div>
-                        </div>
-                        <div className="project-mini-stat">
-                          <div className="project-mini-label">Loops Used</div>
-                          <div className="project-mini-value">{qaRun.iterations_run}/{qaRun.max_iterations}</div>
-                        </div>
-                        <div className="project-mini-stat">
-                          <div className="project-mini-label">Tester Gate</div>
-                          <div className="project-mini-value">{qaRun.passed ? 'PASS' : 'RETRY'}</div>
-                        </div>
-                        <div className="project-mini-stat">
-                          <div className="project-mini-label">Handoff</div>
-                          <div className="project-mini-value">{qaRun.final_report?.handoff_target === 'CEO -> user/admin' ? 'CEO' : 'Rework'}</div>
-                        </div>
-                      </div>
-
-                      <div className="project-section-title">QA Simulation</div>
-                      <div className="project-feed">
-                        <div className="project-feed-row">
-                          <div>
-                            <div className="project-feed-title">{qaRun.final_report?.summary}</div>
-                            <div className="project-feed-sub">{qaRun.ceo_summary}</div>
-                          </div>
-                          <span className={`badge ${qaRun.passed ? 'success' : 'failed'}`}>
-                            {qaRun.final_report?.qa_gate}
-                          </span>
-                        </div>
-                        {qaRun.department_plan?.map((item) => (
-                          <div key={`${p.id}-${item.department}`} className="project-feed-row">
-                            <div>
-                              <div className="project-feed-title">{item.department}</div>
-                              <div className="project-feed-sub">{item.mission}</div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="project-section-title">Tester Findings</div>
-                      <div className="project-feed">
-                        {(qaRun.unresolved_findings?.length ? qaRun.unresolved_findings : qaRun.initial_findings || []).slice(0, 4).map((item, index) => (
-                          <div key={`${p.id}-finding-${index}`} className="project-feed-row">
-                            <div>
-                              <div className="project-feed-title">{item.title}</div>
-                              <div className="project-feed-sub">{item.detail}</div>
-                            </div>
-                            <span className={`badge ${item.severity === 'high' ? 'failed' : 'pending'}`}>
-                              {item.category}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="project-section-title">Last Tester Loops</div>
-                      <div className="project-feed">
-                        {[...(qaRun.history || [])].slice(-4).reverse().map((item) => (
-                          <div key={`${p.id}-loop-${item.iteration}`} className="project-feed-row">
-                            <div>
-                              <div className="project-feed-title">
-                                Loop {item.iteration} · {formatScore(item.tester_score)}
-                              </div>
-                              <div className="project-feed-sub">
-                                {item.approvals} approvals · {item.bug_reports} bug reports · UI {item.ui_flags} · Workflow {item.workflow_flags} · Features {item.feature_flags}
-                              </div>
-                            </div>
-                            <span className={`badge ${item.pass ? 'success' : 'pending'}`}>
-                              {item.pass ? 'pass' : 'retry'}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
-
-              {/* Inline success/error banner for workflow creation */}
-              {successMsg && successMsg.projectId === p.id && (
-                <div style={{
-                  marginTop: 10, padding: '8px 12px',
-                  borderRadius: 'var(--radius)',
-                  background: successMsg.isError ? 'var(--red-bg)' : 'var(--green-bg)',
-                  border: `1px solid ${successMsg.isError ? 'rgba(255,107,107,0.3)' : 'rgba(81,207,102,0.3)'}`,
-                  fontSize: 12,
-                  color: successMsg.isError ? 'var(--red)' : 'var(--green)',
-                }}>
-                  {successMsg.isError ? (
-                    <span>{successMsg.text}</span>
-                  ) : (
-                    <span>
-                      Workflow created — {successMsg.taskCount} tasks across {successMsg.phases} phases.{' '}
-                      <span
-                        onClick={() => navigate('/issues')}
-                        style={{ textDecoration: 'underline', cursor: 'pointer', fontWeight: 600 }}
-                      >
-                        View in Issues
-                      </span>
-                    </span>
-                  )}
-                </div>
-              )}
-
-              <div
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  right: 0,
-                  width: 4,
-                  height: '100%',
-                  borderRadius: '0 10px 10px 0',
-                  background: TYPE_COLORS[p.type] || 'var(--text-muted)',
-                }}
-              />
-            </div>
+              <div style={{ position: 'absolute', top: 0, right: 0, width: 4, height: '100%', borderRadius: '0 10px 10px 0', background: TYPE_COLORS[project.type] || 'var(--text-muted)' }} />
+            </article>
           );
         })}
       </div>

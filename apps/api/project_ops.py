@@ -138,6 +138,18 @@ def _qa_simulation_action(project_id: str, project_name: str, kind: str) -> dict
     )
 
 
+def _qa_live_action(project_id: str, project_name: str, kind: str) -> dict:
+    kind_label = kind.replace("_", " ") if kind else "project"
+    return _action(
+        f"{project_id}-qa-live",
+        "Run live browser QA",
+        "Open the real app in a browser, test desktop/tablet/mobile, and auto-start the fix -> retest loop if the score is too low.",
+        f"Run live browser QA for {project_name} as a {kind_label}, validate UI, workflow, and feature behavior in a real browser, then create remediation tasks if the score stays below 8.5/10.",
+        action_label="Run live QA",
+        action_type="qa_live",
+    )
+
+
 def build_project_ops_profile(project_id: str, project_path: Path, meta: dict, status: str) -> dict:
     package = _package_manifest(project_path)
     scripts = package.get("scripts") or {}
@@ -201,6 +213,9 @@ def build_project_ops_profile(project_id: str, project_path: Path, meta: dict, s
 
     else:
         suggestions.extend(_generic_actions(project_id, meta["name"], kind))
+
+    if kind in {"cloudflare_pages", "next_frontend", "php_app", "static_site"}:
+        suggestions.append(_qa_live_action(project_id, meta["name"], kind))
 
     suggestions.append(_qa_simulation_action(project_id, meta["name"], kind))
 

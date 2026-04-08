@@ -23,6 +23,7 @@ def test_build_project_ops_profile_for_next_frontend(tmp_path):
     assert profile["kind"] == "next_frontend"
     assert any(signal["label"] == "Env template" for signal in profile["signals"])
     assert any(item["id"] == "review-dashboard-frontend-verify" for item in profile["suggestions"])
+    assert any(item["id"] == "review-dashboard-qa-live" and item["action_type"] == "qa_live" for item in profile["suggestions"])
     assert any(item["id"] == "review-dashboard-qa-simulate" and item["action_type"] == "qa_simulation" for item in profile["suggestions"])
 
 
@@ -41,6 +42,7 @@ def test_build_project_ops_profile_for_python_service(tmp_path):
     assert profile["kind"] == "python_service"
     assert any(signal["label"] == "Infrastructure" for signal in profile["signals"])
     assert any(item["id"] == "review-system-service-verify" for item in profile["suggestions"])
+    assert not any(item["action_type"] == "qa_live" for item in profile["suggestions"])
     assert any(item["id"] == "review-system-qa-simulate" and item["action_type"] == "qa_simulation" for item in profile["suggestions"])
 
 

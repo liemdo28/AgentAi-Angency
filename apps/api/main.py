@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 from db.repository import ControlPlaneDB
 from apps.api.project_ops import build_project_ops_profile
 from apps.api.qa_execution import run_live_project_qa
-from apps.api.qa_followups import create_live_qa_followup_tasks
+from apps.api.qa_followups import create_live_qa_ceo_escalation, create_live_qa_followup_tasks
 from apps.api.qa_simulation import simulate_project_qa_loop
 from core.orchestrator.registry import AgentRegistry
 from core.policies.engine import PolicyEngine
@@ -231,6 +231,7 @@ class ProjectQaLiveRequest(BaseModel):
     pass_threshold: float = 8.5
     timeout_ms: int = 15000
     auto_create_fix_tasks: bool = True
+    max_retest_cycles: int = 5
 
 
 # ── Dashboard ─────────────────────────────────────────────────────────
@@ -1274,13 +1275,132 @@ def _build_project_snapshot(project_id: str, meta: dict) -> dict:
     }
 
 
-def _maybe_trigger_live_qa_retest(task: dict) -> dict | None:
-    context = task.get("context_json") or {}
-    if isinstance(context, str):
+def _load_json_blob(value: object) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
         try:
-            context = json.loads(context or "{}")
+            return json.loads(value or "{}")
         except json.JSONDecodeError:
-            context = {}
+            return {}
+    return {}
+
+
+def _build_live_qa_loop_summary(project_id: str) -> dict | None:
+    qa_tasks = []
+    for task in db.list_tasks(limit=500):
+        context = _load_json_blob(task.get("context_json"))
+        if context.get("source") != "qa_live" or context.get("project_id") != project_id:
+            continue
+        enriched = dict(task)
+        enriched["context_json"] = context
+        qa_tasks.append(enriched)
+
+    if not qa_tasks:
+        return None
+
+    qa_tasks.sort(key=lambda item: item.get("created_at") or "")
+    latest_goal_id = next((item.get("goal_id") for item in reversed(qa_tasks) if item.get("goal_id")), None)
+    if not latest_goal_id:
+        return None
+
+    goal = db.get_goal(latest_goal_id)
+    goal_tasks = [
+        task for task in db.list_tasks_by_goal(latest_goal_id)
+        if (task.get("context_json") or {}).get("source") == "qa_live"
+    ]
+    if not goal_tasks:
+        return None
+
+    retests = [task for task in goal_tasks if task.get("task_type") == "qa_live_retest"]
+    escalations = [task for task in goal_tasks if task.get("task_type") == "qa_live_escalation"]
+    remediation = [
+        task for task in goal_tasks
+        if task.get("task_type") in {"qa_live_fix", "qa_live_coordination"}
+    ]
+    pending_tasks = [task for task in remediation if task.get("status") in {"pending", "running"}]
+    successful_tasks = [task for task in remediation if task.get("status") == "success"]
+    failed_tasks = [task for task in remediation if task.get("status") == "failed"]
+
+    max_retest_cycles = max(
+        int((task.get("context_json") or {}).get("max_retest_cycles", 5))
+        for task in goal_tasks
+    )
+    latest_retest = retests[-1] if retests else None
+    latest_retest_output = {}
+    if latest_retest:
+        latest_jobs = db.list_jobs(task_id=latest_retest["id"], limit=1)
+        if latest_jobs:
+            latest_retest_output = _load_json_blob(latest_jobs[0].get("output_json"))
+
+    if latest_retest_output.get("passed"):
+        status = "passed"
+        label = "Passed live QA"
+    elif escalations:
+        status = "escalated"
+        label = "Escalated to CEO"
+    elif latest_retest and latest_retest.get("status") == "running":
+        status = "retesting"
+        label = "Retesting now"
+    elif pending_tasks:
+        status = "fixing"
+        label = "Departments fixing findings"
+    elif latest_retest and latest_retest.get("status") == "failed":
+        status = "failed"
+        label = "Retest failed"
+    else:
+        status = "queued"
+        label = "QA follow-up queued"
+
+    latest_findings = latest_retest_output.get("findings") or []
+    if not latest_findings:
+        latest_findings = [
+            (task.get("context_json") or {}).get("finding")
+            for task in remediation
+            if (task.get("context_json") or {}).get("finding")
+        ][:4]
+
+    return {
+        "goal_id": latest_goal_id,
+        "goal_title": goal.get("title") if goal else None,
+        "status": status,
+        "label": label,
+        "retest_attempts": len(retests),
+        "max_retest_cycles": max_retest_cycles,
+        "remaining_retests": max(0, max_retest_cycles - len(retests)),
+        "followup_task_count": len(remediation),
+        "pending_tasks": len(pending_tasks),
+        "successful_tasks": len(successful_tasks),
+        "failed_tasks": len(failed_tasks),
+        "escalated": bool(escalations),
+        "latest_retest": {
+            "id": latest_retest.get("id"),
+            "status": latest_retest.get("status"),
+            "attempt": (latest_retest.get("context_json") or {}).get("retest_attempt"),
+            "score": latest_retest_output.get("final_score"),
+            "passed": latest_retest_output.get("passed"),
+            "summary": latest_retest_output.get("summary"),
+        } if latest_retest else None,
+        "escalation_task": {
+            "id": escalations[-1].get("id"),
+            "status": escalations[-1].get("status"),
+            "title": escalations[-1].get("title"),
+        } if escalations else None,
+        "latest_findings": latest_findings,
+        "active_tasks": [
+            {
+                "id": task.get("id"),
+                "title": task.get("title"),
+                "status": task.get("status"),
+                "assigned_agent_id": task.get("assigned_agent_id"),
+            }
+            for task in (pending_tasks[:4] or remediation[:4])
+        ],
+    }
+
+
+def _maybe_trigger_live_qa_retest(task: dict) -> dict | None:
+    context = _load_json_blob(task.get("context_json"))
 
     if context.get("source") != "qa_live" or task.get("task_type") not in {"qa_live_fix", "qa_live_coordination"}:
         return None
@@ -1311,7 +1431,9 @@ def _maybe_trigger_live_qa_retest(task: dict) -> dict | None:
 
     project_snapshot = _build_project_snapshot(project_id, meta)
     prior_retests = [item for item in goal_tasks if item.get("task_type") == "qa_live_retest"]
+    max_retest_cycles = max(1, int(context.get("max_retest_cycles", 5)))
     attempt = len(prior_retests) + 1
+    timeout_ms = int(context.get("timeout_ms", 15000))
     retest_task = db.create_task(
         title=f"[{project_id}] Retest live QA after remediation",
         assigned_agent_id="dept-operations",
@@ -1329,6 +1451,8 @@ def _maybe_trigger_live_qa_retest(task: dict) -> dict | None:
             "retest_attempt": attempt,
             "trigger_task_id": task.get("id"),
             "pass_threshold": context.get("pass_threshold", 8.5),
+            "timeout_ms": timeout_ms,
+            "max_retest_cycles": max_retest_cycles,
             "auto_triggered": True,
         },
     )
@@ -1337,17 +1461,38 @@ def _maybe_trigger_live_qa_retest(task: dict) -> dict | None:
     result = run_live_project_qa(
         project_snapshot,
         pass_threshold=float(context.get("pass_threshold", 8.5)),
-        timeout_ms=15000,
+        timeout_ms=timeout_ms,
     )
+    result["timeout_ms"] = timeout_ms
+    escalation_task = None
     if result.get("passed"):
         db.update_task_status(retest_task_id, "success")
         followup_goal = None
         followup_tasks = []
     else:
         db.update_task_status(retest_task_id, "failed")
-        followup = create_live_qa_followup_tasks(db, project_snapshot, result, goal_id=goal_id)
-        followup_goal = followup.get("goal")
-        followup_tasks = followup.get("tasks", [])
+        if attempt >= max_retest_cycles:
+            escalation = create_live_qa_ceo_escalation(
+                db,
+                project_snapshot,
+                result,
+                goal_id=goal_id,
+                retest_attempt=attempt,
+                max_retest_cycles=max_retest_cycles,
+            )
+            followup_goal = escalation.get("goal")
+            followup_tasks = []
+            escalation_task = escalation.get("task")
+        else:
+            followup = create_live_qa_followup_tasks(
+                db,
+                project_snapshot,
+                result,
+                goal_id=goal_id,
+                max_retest_cycles=max_retest_cycles,
+            )
+            followup_goal = followup.get("goal")
+            followup_tasks = followup.get("tasks", [])
 
     db.save_job(
         task_id=retest_task_id,
@@ -1357,14 +1502,18 @@ def _maybe_trigger_live_qa_retest(task: dict) -> dict | None:
             **result,
             "followup_goal": followup_goal,
             "followup_tasks": followup_tasks,
+            "escalation_task": escalation_task,
         },
     )
+    loop_summary = _build_live_qa_loop_summary(project_id)
     return {
         "task": db.get_task(retest_task_id),
         "result": {
             **result,
             "followup_goal": followup_goal,
             "followup_tasks": followup_tasks,
+            "escalation_task": escalation_task,
+            "loop_summary": loop_summary,
         },
     }
 
@@ -1545,6 +1694,7 @@ def list_projects():
             "local_path": str(project_path),
             "integration_ops": integration_ops,
             "ops_profile": ops_profile,
+            "live_qa_loop": _build_live_qa_loop_summary(dir_name),
         })
     return projects
 
@@ -1578,6 +1728,7 @@ def get_project(project_id: str):
         "file_count": file_count,
         "integration_ops": integration_ops,
         "ops_profile": ops_profile,
+        "live_qa_loop": _build_live_qa_loop_summary(project_id),
         **git,
     }
 
@@ -1610,13 +1761,20 @@ def run_project_live_qa(project_id: str, body: ProjectQaLiveRequest):
         pass_threshold=body.pass_threshold,
         timeout_ms=body.timeout_ms,
     )
+    result["timeout_ms"] = body.timeout_ms
     if not result.get("passed") and body.auto_create_fix_tasks:
-        followup = create_live_qa_followup_tasks(db, project_snapshot, result)
+        followup = create_live_qa_followup_tasks(
+            db,
+            project_snapshot,
+            result,
+            max_retest_cycles=body.max_retest_cycles,
+        )
         result["followup_goal"] = followup.get("goal")
         result["followup_tasks"] = followup.get("tasks", [])
     else:
         result["followup_goal"] = None
         result["followup_tasks"] = []
+    result["loop_summary"] = _build_live_qa_loop_summary(project_id)
     return result
 
 
