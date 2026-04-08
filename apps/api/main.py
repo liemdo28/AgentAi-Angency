@@ -36,6 +36,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from db.repository import ControlPlaneDB
 from apps.api.project_ops import build_project_ops_profile
+from apps.api.qa_execution import run_live_project_qa
+from apps.api.qa_followups import create_live_qa_followup_tasks
 from apps.api.qa_simulation import simulate_project_qa_loop
 from core.orchestrator.registry import AgentRegistry
 from core.policies.engine import PolicyEngine
@@ -225,6 +227,12 @@ class ProjectQaSimulationRequest(BaseModel):
     pass_threshold: float = 8.5
 
 
+class ProjectQaLiveRequest(BaseModel):
+    pass_threshold: float = 8.5
+    timeout_ms: int = 15000
+    auto_create_fix_tasks: bool = True
+
+
 # ── Dashboard ─────────────────────────────────────────────────────────
 
 @app.get("/")
@@ -379,6 +387,9 @@ def execute_task(task_id: str):
                 input_data={"description": task.get("description", "")},
                 output_data=result,
             )
+            qa_retest = _maybe_trigger_live_qa_retest(db.get_task(task_id) or task)
+            if qa_retest:
+                result["qa_retest"] = qa_retest
         else:
             db.update_task_status(task_id, "failed")
         return result
@@ -958,12 +969,59 @@ PROJECT_REGISTRY = {
 
 # Store registry (Bakudan Ramen locations)
 STORE_REGISTRY = {
-    "B1": {"name": "Bakudan Ramen - Alamo Ranch", "address": "12602 W Interstate 10, San Antonio, TX 78249", "brand": "bakudan"},
-    "B2": {"name": "Bakudan Ramen - La Cantera", "address": "15900 La Cantera Pkwy, San Antonio, TX 78256", "brand": "bakudan"},
-    "B3": {"name": "Bakudan Ramen - Stone Oak", "address": "22211 IH 10 W, San Antonio, TX 78256", "brand": "bakudan"},
-    "RAW": {"name": "Raw Sushi Bistro - Stockton", "address": "5756 Pacific Ave, Stockton, CA 95207", "brand": "raw"},
-    "COPPER": {"name": "Copper Bowl", "address": "TBD", "brand": "copper"},
-    "IFT": {"name": "International Food Truck", "address": "Mobile", "brand": "ift"},
+    # Bakudan Ramen — 3 locations in San Antonio, TX
+    "B1": {
+        "name": "Bakudan Ramen - The Rim",
+        "address": "17619 La Cantera Pkwy UNIT 208, San Antonio, TX",
+        "phone": "(210) 257-8080",
+        "brand": "bakudan",
+    },
+    "B2": {
+        "name": "Bakudan Ramen - Stone Oak",
+        "address": "22506 U.S. Hwy 281 N Ste 106, San Antonio, TX",
+        "phone": "(210) 437-0632",
+        "brand": "bakudan",
+    },
+    "B3": {
+        "name": "Bakudan Ramen - Bandera",
+        "address": "11309 Bandera Rd Ste 111, San Antonio, TX",
+        "phone": "(210) 277-7740",
+        "brand": "bakudan",
+    },
+    # Raw Sushi Bar — Stockton, CA
+    "RAW": {
+        "name": "Raw Sushi Bar - Stockton",
+        "address": "10742 Trinity Parkway, Suite D, Stockton, CA",
+        "phone": "(209) 954-9729",
+        "brand": "raw",
+    },
+    # Infused Tea Lounge — Las Vegas, NV
+    "IFT": {
+        "name": "Infused Tea Lounge",
+        "address": "5105 S Ft Apache Ste 110, Las Vegas, NV 89148",
+        "phone": "(725) 266-4100",
+        "brand": "ift",
+        "website": "theinfusedtealounge.com",
+    },
+    # Sunright Tea Studio — 3 locations in Seattle, WA
+    "C1": {
+        "name": "Sunright Tea Studio - Capitol Hill",
+        "address": "1521 Broadway, Seattle, WA 98122",
+        "phone": "",
+        "brand": "copper",
+    },
+    "C2": {
+        "name": "Sunright Tea Studio - U-District",
+        "address": "4545 Roosevelt Way NE #103, Seattle, WA 98105",
+        "phone": "",
+        "brand": "copper",
+    },
+    "C3": {
+        "name": "Sunright Tea Studio - Federal Way",
+        "address": "32225 Pacific Hwy S Ste 103, Federal Way, WA 98003",
+        "phone": "",
+        "brand": "copper",
+    },
 }
 
 
@@ -1191,6 +1249,126 @@ def _resolve_project_path(project_id: str, meta: dict) -> Path:
     return MASTER_DIR / Path(meta.get("relative_path") or project_id)
 
 
+def _build_project_snapshot(project_id: str, meta: dict) -> dict:
+    project_path = _resolve_project_path(project_id, meta)
+    git = _git_info(project_path)
+    status, status_extra = _detect_status(project_path, meta.get("port"), meta.get("url"))
+    ops_profile = build_project_ops_profile(project_id, project_path, meta, status)
+    return {
+        "id": project_id,
+        "name": meta["name"],
+        "description": meta["description"],
+        "type": meta["type"],
+        "category": meta["category"],
+        "tech": meta["tech"],
+        "github": meta.get("github"),
+        "exists": project_path.exists(),
+        "status": status,
+        "latency_ms": status_extra.get("latency_ms"),
+        "status_code": status_extra.get("status_code"),
+        "dirty": git.get("dirty", False),
+        "branch": git.get("branch"),
+        "url": meta.get("url"),
+        "port": meta.get("port"),
+        "ops_profile": ops_profile,
+    }
+
+
+def _maybe_trigger_live_qa_retest(task: dict) -> dict | None:
+    context = task.get("context_json") or {}
+    if isinstance(context, str):
+        try:
+            context = json.loads(context or "{}")
+        except json.JSONDecodeError:
+            context = {}
+
+    if context.get("source") != "qa_live" or task.get("task_type") not in {"qa_live_fix", "qa_live_coordination"}:
+        return None
+
+    goal_id = task.get("goal_id")
+    project_id = context.get("project_id")
+    if not goal_id or not project_id:
+        return None
+
+    goal_tasks = db.list_tasks_by_goal(goal_id)
+    remediation_tasks = [
+        item for item in goal_tasks
+        if item.get("task_type") in {"qa_live_fix", "qa_live_coordination"}
+    ]
+    if not remediation_tasks or any(item.get("status") != "success" for item in remediation_tasks):
+        return None
+
+    existing_retests = [
+        item for item in goal_tasks
+        if item.get("task_type") == "qa_live_retest" and item.get("status") in {"pending", "running"}
+    ]
+    if existing_retests:
+        return None
+
+    meta = PROJECT_REGISTRY.get(project_id)
+    if not meta:
+        return None
+
+    project_snapshot = _build_project_snapshot(project_id, meta)
+    prior_retests = [item for item in goal_tasks if item.get("task_type") == "qa_live_retest"]
+    attempt = len(prior_retests) + 1
+    retest_task = db.create_task(
+        title=f"[{project_id}] Retest live QA after remediation",
+        assigned_agent_id="dept-operations",
+        goal_id=goal_id,
+        description=(
+            f"Run live browser QA retest for {project_snapshot['name']} after the remediation tasks "
+            f"completed. Attempt {attempt} should confirm whether the score now clears the release gate."
+        ),
+        task_type="qa_live_retest",
+        priority=2,
+        context_json={
+            "source": "qa_live",
+            "project_id": project_id,
+            "project_name": project_snapshot["name"],
+            "retest_attempt": attempt,
+            "trigger_task_id": task.get("id"),
+            "pass_threshold": context.get("pass_threshold", 8.5),
+            "auto_triggered": True,
+        },
+    )
+    retest_task_id = retest_task["id"]
+    db.update_task_status(retest_task_id, "running")
+    result = run_live_project_qa(
+        project_snapshot,
+        pass_threshold=float(context.get("pass_threshold", 8.5)),
+        timeout_ms=15000,
+    )
+    if result.get("passed"):
+        db.update_task_status(retest_task_id, "success")
+        followup_goal = None
+        followup_tasks = []
+    else:
+        db.update_task_status(retest_task_id, "failed")
+        followup = create_live_qa_followup_tasks(db, project_snapshot, result, goal_id=goal_id)
+        followup_goal = followup.get("goal")
+        followup_tasks = followup.get("tasks", [])
+
+    db.save_job(
+        task_id=retest_task_id,
+        agent_id="dept-operations",
+        input_data={"project_id": project_id, "mode": "qa_live_retest", "attempt": attempt},
+        output_data={
+            **result,
+            "followup_goal": followup_goal,
+            "followup_tasks": followup_tasks,
+        },
+    )
+    return {
+        "task": db.get_task(retest_task_id),
+        "result": {
+            **result,
+            "followup_goal": followup_goal,
+            "followup_tasks": followup_tasks,
+        },
+    }
+
+
 @app.post("/edge/projects/{project_id}/snapshot")
 def upsert_edge_project_snapshot(
     project_id: str,
@@ -1410,28 +1588,7 @@ def run_project_qa_simulation(project_id: str, body: ProjectQaSimulationRequest)
     if not meta:
         raise HTTPException(404, "Project not found")
 
-    project_path = _resolve_project_path(project_id, meta)
-    git = _git_info(project_path)
-    status, status_extra = _detect_status(project_path, meta.get("port"), meta.get("url"))
-    ops_profile = build_project_ops_profile(project_id, project_path, meta, status)
-
-    project_snapshot = {
-        "id": project_id,
-        "name": meta["name"],
-        "description": meta["description"],
-        "type": meta["type"],
-        "category": meta["category"],
-        "tech": meta["tech"],
-        "github": meta.get("github"),
-        "exists": project_path.exists(),
-        "status": status,
-        "latency_ms": status_extra.get("latency_ms"),
-        "status_code": status_extra.get("status_code"),
-        "dirty": git.get("dirty", False),
-        "branch": git.get("branch"),
-        "ops_profile": ops_profile,
-    }
-
+    project_snapshot = _build_project_snapshot(project_id, meta)
     return simulate_project_qa_loop(
         project_snapshot,
         goal=body.goal,
@@ -1439,6 +1596,28 @@ def run_project_qa_simulation(project_id: str, body: ProjectQaSimulationRequest)
         max_iterations=body.max_iterations,
         pass_threshold=body.pass_threshold,
     )
+
+
+@app.post("/projects/{project_id}/qa-live")
+def run_project_live_qa(project_id: str, body: ProjectQaLiveRequest):
+    meta = PROJECT_REGISTRY.get(project_id)
+    if not meta:
+        raise HTTPException(404, "Project not found")
+
+    project_snapshot = _build_project_snapshot(project_id, meta)
+    result = run_live_project_qa(
+        project_snapshot,
+        pass_threshold=body.pass_threshold,
+        timeout_ms=body.timeout_ms,
+    )
+    if not result.get("passed") and body.auto_create_fix_tasks:
+        followup = create_live_qa_followup_tasks(db, project_snapshot, result)
+        result["followup_goal"] = followup.get("goal")
+        result["followup_tasks"] = followup.get("tasks", [])
+    else:
+        result["followup_goal"] = None
+        result["followup_tasks"] = []
+    return result
 
 
 @app.get("/projects/{project_id}/live-status")

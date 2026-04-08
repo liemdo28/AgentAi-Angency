@@ -13,17 +13,20 @@ from pydantic import BaseModel, Field
 class StoreType(str, Enum):
     BAKUDAN = "bakudan"
     RAW_SUSHI = "raw_sushi"
-    COPPER = "copper"
-    IFT = "ift"
+    SUNRIGHT = "copper"        # Sunright Tea Studio (legacy key: copper)
+    INFUSED_TEA = "ift"        # Infused Tea Lounge (legacy key: ift)
     OTHER = "other"
 
 
 class StoreLocation(str, Enum):
-    THE_RIM = "the_rim"      # B1
-    STONE_OAK = "stone_oak"  # B2
-    BANDERA = "bandera"      # B3
-    STOCKTON = "stockton"    # Raw Sushi
-    TEXAS = "texas"          # Copper, IFT
+    THE_RIM = "the_rim"              # B1 — San Antonio
+    STONE_OAK = "stone_oak"          # B2 — San Antonio
+    BANDERA = "bandera"              # B3 — San Antonio
+    STOCKTON = "stockton"            # RAW — Stockton, CA
+    LAS_VEGAS = "las_vegas"          # IFT — Las Vegas, NV
+    SEATTLE_CAPITOL = "seattle_cap"  # C1 — Seattle Capitol Hill
+    SEATTLE_UDISTRICT = "seattle_u"  # C2 — Seattle U-District
+    FEDERAL_WAY = "federal_way"      # C3 — Federal Way, WA
 
 
 class ProjectStatus(str, Enum):
@@ -186,53 +189,73 @@ class SyncJob(BaseModel):
 
 # All stores in the system
 ALL_STORES = {
+    # Bakudan Ramen — 3 locations in San Antonio, TX
     "B1": Store(
         id="B1",
-        name="Bakudan 1 - THE RIM",
+        name="Bakudan Ramen - The Rim",
         store_type=StoreType.BAKUDAN,
         location=StoreLocation.THE_RIM,
         city="San Antonio",
-        state="TX"
+        state="TX",
     ),
     "B2": Store(
         id="B2",
-        name="Bakudan 2 - STONE OAK",
+        name="Bakudan Ramen - Stone Oak",
         store_type=StoreType.BAKUDAN,
         location=StoreLocation.STONE_OAK,
         city="San Antonio",
-        state="TX"
+        state="TX",
     ),
     "B3": Store(
         id="B3",
-        name="Bakudan 3 - BANDERA",
+        name="Bakudan Ramen - Bandera",
         store_type=StoreType.BAKUDAN,
         location=StoreLocation.BANDERA,
         city="San Antonio",
-        state="TX"
+        state="TX",
     ),
+    # Raw Sushi Bar — Stockton, CA
     "RAW": Store(
         id="RAW",
-        name="Raw Sushi - Stockton",
+        name="Raw Sushi Bar - Stockton",
         store_type=StoreType.RAW_SUSHI,
         location=StoreLocation.STOCKTON,
         city="Stockton",
-        state="CA"
+        state="CA",
     ),
-    "COPPER": Store(
-        id="COPPER",
-        name="Copper",
-        store_type=StoreType.COPPER,
-        location=StoreLocation.TEXAS,
-        city="San Antonio",
-        state="TX"
-    ),
+    # Infused Tea Lounge — Las Vegas, NV
     "IFT": Store(
         id="IFT",
-        name="IFT",
-        store_type=StoreType.IFT,
-        location=StoreLocation.TEXAS,
-        city="Texas",
-        state="TX"
+        name="Infused Tea Lounge",
+        store_type=StoreType.INFUSED_TEA,
+        location=StoreLocation.LAS_VEGAS,
+        city="Las Vegas",
+        state="NV",
+    ),
+    # Sunright Tea Studio — 3 locations in Seattle, WA
+    "C1": Store(
+        id="C1",
+        name="Sunright Tea Studio - Capitol Hill",
+        store_type=StoreType.SUNRIGHT,
+        location=StoreLocation.SEATTLE_CAPITOL,
+        city="Seattle",
+        state="WA",
+    ),
+    "C2": Store(
+        id="C2",
+        name="Sunright Tea Studio - U-District",
+        store_type=StoreType.SUNRIGHT,
+        location=StoreLocation.SEATTLE_UDISTRICT,
+        city="Seattle",
+        state="WA",
+    ),
+    "C3": Store(
+        id="C3",
+        name="Sunright Tea Studio - Federal Way",
+        store_type=StoreType.SUNRIGHT,
+        location=StoreLocation.FEDERAL_WAY,
+        city="Federal Way",
+        state="WA",
     ),
 }
 
