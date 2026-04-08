@@ -1005,20 +1005,20 @@ STORE_REGISTRY = {
     },
     # Sunright Tea Studio — 3 locations in Seattle, WA
     "C1": {
-        "name": "Sunright Tea Studio - Capitol Hill",
-        "address": "1521 Broadway, Seattle, WA 98122",
-        "phone": "",
-        "brand": "copper",
-    },
-    "C2": {
         "name": "Sunright Tea Studio - U-District",
         "address": "4545 Roosevelt Way NE #103, Seattle, WA 98105",
         "phone": "",
         "brand": "copper",
     },
-    "C3": {
+    "C2": {
         "name": "Sunright Tea Studio - Federal Way",
         "address": "32225 Pacific Hwy S Ste 103, Federal Way, WA 98003",
+        "phone": "",
+        "brand": "copper",
+    },
+    "C3": {
+        "name": "Sunright Tea Studio - Capitol Hill",
+        "address": "1521 Broadway, Seattle, WA 98122",
         "phone": "",
         "brand": "copper",
     },

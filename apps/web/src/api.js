@@ -5,7 +5,11 @@ async function request(path, options = {}) {
     headers: { 'Content-Type': 'application/json' },
     ...options,
   });
-  if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { const body = await res.json(); detail = body.detail || body.message || JSON.stringify(body); } catch {}
+    throw new Error(`${res.status}: ${detail}`);
+  }
   return res.json();
 }
 
@@ -51,6 +55,7 @@ export const getActivity = () => request('/activity');
 export const listProjects = () => request('/projects');
 export const getProject = (id) => request(`/projects/${id}`);
 export const runProjectQaSimulation = (id, data) => request(`/projects/${id}/qa-simulate`, { method: 'POST', body: JSON.stringify(data) });
+export const runProjectLiveQa = (id, data) => request(`/projects/${id}/qa-live`, { method: 'POST', body: JSON.stringify(data) });
 export const checkProjectLiveStatus = (id) => request(`/projects/${id}/live-status`);
 export const checkProjectHealth = (id) => request(`/projects/${id}/health`);
 export const listProjectCommands = (id, machineId) => request(`/projects/${id}/commands${machineId ? `?machine_id=${machineId}` : ''}`);

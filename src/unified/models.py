@@ -235,26 +235,26 @@ ALL_STORES = {
     # Sunright Tea Studio — 3 locations in Seattle, WA
     "C1": Store(
         id="C1",
-        name="Sunright Tea Studio - Capitol Hill",
-        store_type=StoreType.SUNRIGHT,
-        location=StoreLocation.SEATTLE_CAPITOL,
-        city="Seattle",
-        state="WA",
-    ),
-    "C2": Store(
-        id="C2",
         name="Sunright Tea Studio - U-District",
         store_type=StoreType.SUNRIGHT,
         location=StoreLocation.SEATTLE_UDISTRICT,
         city="Seattle",
         state="WA",
     ),
-    "C3": Store(
-        id="C3",
+    "C2": Store(
+        id="C2",
         name="Sunright Tea Studio - Federal Way",
         store_type=StoreType.SUNRIGHT,
         location=StoreLocation.FEDERAL_WAY,
         city="Federal Way",
+        state="WA",
+    ),
+    "C3": Store(
+        id="C3",
+        name="Sunright Tea Studio - Capitol Hill",
+        store_type=StoreType.SUNRIGHT,
+        location=StoreLocation.SEATTLE_CAPITOL,
+        city="Seattle",
         state="WA",
     ),
 }
