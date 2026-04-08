@@ -207,7 +207,6 @@ function ContentHeader() {
       <div className="content-header-copy">
         <div className="content-header-section">{meta.section}</div>
         <div className="content-header-title">{meta.title}</div>
-        <div className="content-header-subtitle">{meta.subtitle}</div>
       </div>
       <div className="content-header-actions">
         <WorldClocks />
