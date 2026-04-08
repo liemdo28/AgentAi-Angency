@@ -296,11 +296,18 @@ def execute_smart_issue(body: SmartIssueRequest):
             )
             created_tasks.append(t)
 
+    # Collect agent names involved
+    agent_names = list(dict.fromkeys(
+        t.get("assigned_agent_id", "") for t in created_tasks
+    ))
+
     return {
         "goal": goal,
         "plan": plan,
         "created_tasks": created_tasks,
         "total_created": len(created_tasks),
+        "total_phases": len(plan["phases"]),
+        "agents_involved": agent_names,
     }
 
 
@@ -771,6 +778,7 @@ PROJECT_REGISTRY = {
         "description": "Official restaurant website — menu, locations, ordering",
         "relative_path": "BakudanWebsite_Sub",
         "port": None,
+        "url": "https://bakudanramen.com",
         "tech": ["HTML", "CSS", "JavaScript"],
         "github": "liemdo28/bakudanwebsite_sub",
     },
@@ -781,6 +789,7 @@ PROJECT_REGISTRY = {
         "description": "Secondary iteration of restaurant website",
         "relative_path": "BakudanWebsite_Sub2",
         "port": None,
+        "url": None,
         "tech": ["HTML", "CSS", "JavaScript"],
         "github": "liemdo28/bakudanwebsite_sub2",
     },
@@ -791,6 +800,7 @@ PROJECT_REGISTRY = {
         "description": "Restaurant website — menu, blog, analytics",
         "relative_path": "RawWebsite",
         "port": None,
+        "url": "https://stockton.rawsushibar.com",
         "tech": ["HTML", "CSS", "JavaScript"],
         "github": "liemdo28/rawwebsite",
     },
@@ -801,6 +811,7 @@ PROJECT_REGISTRY = {
         "description": "Project management — tasks, calendar, notifications, PWA",
         "relative_path": "dashboard.bakudanramen.com",
         "port": None,
+        "url": "https://dashboard.bakudanramen.com",
         "tech": ["PHP", "MySQL", "PWA"],
         "github": "liemdo28/dashboard.bakudanramen.com",
     },
@@ -811,6 +822,7 @@ PROJECT_REGISTRY = {
         "description": "Growth analytics dashboard on Cloudflare Pages",
         "relative_path": "growth-dashboard",
         "port": 8789,
+        "url": "https://marketing.bakudanramen.com",
         "tech": ["Node.js", "Wrangler", "Cloudflare Pages"],
         "github": "liemdo28/growth-dashboard",
     },
@@ -905,19 +917,62 @@ def _git_info(project_path: Path) -> dict:
     return info
 
 
-def _detect_status(project_path: Path, port: int | None = None) -> str:
-    """Detect if a project is healthy based on existence of key files."""
-    if not project_path.exists():
-        return "offline"
-    # Check if service is running on its port
-    if port:
+def _check_url(url: str, timeout: float = 6.0) -> dict:
+    """Check if a URL is reachable. Returns {ok, status_code, latency_ms}."""
+    import time
+    import urllib.request
+    import urllib.error
+    start = time.monotonic()
+    try:
+        req = urllib.request.Request(url, method="HEAD")
+        req.add_header("User-Agent", "AgentAI-HealthCheck/1.0")
+        resp = urllib.request.urlopen(req, timeout=timeout)
+        latency = round((time.monotonic() - start) * 1000)
+        return {"ok": True, "status_code": resp.status, "latency_ms": latency}
+    except urllib.error.HTTPError as e:
+        latency = round((time.monotonic() - start) * 1000)
+        return {"ok": True, "status_code": e.code, "latency_ms": latency}
+    except Exception:
+        # HEAD might be blocked — try GET as fallback
         try:
-            import urllib.request
-            urllib.request.urlopen(f"http://localhost:{port}", timeout=1.5)
-            return "running"
+            start2 = time.monotonic()
+            req = urllib.request.Request(url, method="GET")
+            req.add_header("User-Agent", "AgentAI-HealthCheck/1.0")
+            resp = urllib.request.urlopen(req, timeout=timeout)
+            resp.read(512)  # read a small chunk only
+            latency = round((time.monotonic() - start2) * 1000)
+            return {"ok": True, "status_code": resp.status, "latency_ms": latency}
+        except urllib.error.HTTPError as e2:
+            latency = round((time.monotonic() - start) * 1000)
+            return {"ok": True, "status_code": e2.code, "latency_ms": latency}
         except Exception:
-            pass
-    # Check for source files
+            return {"ok": False, "status_code": 0, "latency_ms": 0}
+
+
+def _detect_status(project_path: Path, port: int | None = None, url: str | None = None) -> tuple[str, dict]:
+    """Detect project status. Returns (status_str, extra_info_dict)."""
+    extra = {"latency_ms": None, "status_code": None, "live_url": url}
+
+    if not project_path.exists():
+        return "offline", extra
+
+    # 1. Check live URL first (production website)
+    if url:
+        check = _check_url(url)
+        if check["ok"]:
+            extra["latency_ms"] = check["latency_ms"]
+            extra["status_code"] = check["status_code"]
+            return "online", extra
+
+    # 2. Check localhost port (dev server)
+    if port:
+        check = _check_url(f"http://localhost:{port}", timeout=1.5)
+        if check["ok"]:
+            extra["latency_ms"] = check["latency_ms"]
+            extra["status_code"] = check["status_code"]
+            return "running", extra
+
+    # 3. Check for source files
     marker_files = [
         "package.json", "requirements.txt", "composer.json",
         "index.html", "app.py", "main.py", "pyproject.toml",
@@ -926,8 +981,9 @@ def _detect_status(project_path: Path, port: int | None = None) -> str:
     ]
     sub_markers = ["src/main.py", "app/main.py", "desktop-app/app.py"]
     if any((project_path / f).exists() for f in marker_files + sub_markers):
-        return "idle"
-    return "warning"
+        return "idle", extra
+
+    return "warning", extra
 
 
 def _load_integration_snapshot(project_path: Path) -> dict | None:
@@ -1198,7 +1254,7 @@ def list_projects():
     for dir_name, meta in PROJECT_REGISTRY.items():
         project_path = _resolve_project_path(dir_name, meta)
         git = _git_info(project_path)
-        status = _detect_status(project_path, meta.get("port"))
+        status, status_extra = _detect_status(project_path, meta.get("port"), meta.get("url"))
         integration_ops = _resolve_integration_snapshot(project_path) if dir_name == "integration-full" else None
         ops_profile = build_project_ops_profile(dir_name, project_path, meta, status)
 
@@ -1209,9 +1265,12 @@ def list_projects():
             "category": meta["category"],
             "description": meta["description"],
             "port": meta["port"],
+            "url": meta.get("url"),
             "tech": meta["tech"],
             "github": meta["github"],
             "status": status,
+            "latency_ms": status_extra.get("latency_ms"),
+            "status_code": status_extra.get("status_code"),
             "exists": project_path.exists(),
             "branch": git["branch"],
             "last_commit": git["last_commit"],
@@ -1233,7 +1292,7 @@ def get_project(project_id: str):
 
     project_path = _resolve_project_path(project_id, meta)
     git = _git_info(project_path)
-    status = _detect_status(project_path, meta.get("port"))
+    status, status_extra = _detect_status(project_path, meta.get("port"), meta.get("url"))
     integration_ops = _resolve_integration_snapshot(project_path) if project_id == "integration-full" else None
     ops_profile = build_project_ops_profile(project_id, project_path, meta, status)
 
@@ -1255,6 +1314,49 @@ def get_project(project_id: str):
         "ops_profile": ops_profile,
         **git,
     }
+
+
+@app.get("/projects/{project_id}/live-status")
+def check_project_live_status(project_id: str):
+    """On-demand live website health check with latency."""
+    meta = PROJECT_REGISTRY.get(project_id)
+    if not meta:
+        raise HTTPException(404, "Project not found")
+
+    url = meta.get("url")
+    port = meta.get("port")
+    now = datetime.now(timezone.utc).isoformat()
+
+    if url:
+        check = _check_url(url)
+        return {
+            "project_id": project_id,
+            "url": url,
+            "is_live": check["ok"],
+            "status_code": check["status_code"],
+            "latency_ms": check["latency_ms"],
+            "checked_at": now,
+        }
+    elif port:
+        check = _check_url(f"http://localhost:{port}", timeout=1.5)
+        return {
+            "project_id": project_id,
+            "url": f"http://localhost:{port}",
+            "is_live": check["ok"],
+            "status_code": check["status_code"],
+            "latency_ms": check["latency_ms"],
+            "checked_at": now,
+        }
+    else:
+        return {
+            "project_id": project_id,
+            "url": None,
+            "is_live": False,
+            "status_code": 0,
+            "latency_ms": 0,
+            "checked_at": now,
+            "message": "No URL or port configured for this project",
+        }
 
 
 @app.get("/agents/roles")

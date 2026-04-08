@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { executeSmartIssue, listProjects } from '../api';
 
 const TYPE_COLORS = {
@@ -18,13 +19,16 @@ const CATEGORY_LABELS = {
 
 function getStatusInfo(project) {
   const s = (project.status || '').toLowerCase();
-  if (s === 'online' || s === 'running') {
-    return { cls: 'status-running', label: 'Running' };
+  if (s === 'online') {
+    return { cls: 'status-running', label: 'Live', color: 'var(--green)' };
+  }
+  if (s === 'running') {
+    return { cls: 'status-running', label: 'Running', color: 'var(--green)' };
   }
   if (s === 'idle' || s === 'stopped') {
-    return { cls: 'status-idle', label: 'Idle' };
+    return { cls: 'status-idle', label: 'Idle', color: 'var(--text-muted)' };
   }
-  return { cls: 'status-offline', label: 'Offline' };
+  return { cls: 'status-offline', label: 'Offline', color: 'var(--red)' };
 }
 
 function truncatePath(p, maxLen = 40) {
@@ -46,6 +50,8 @@ export default function Projects() {
   const [projects, setProjects] = useState([]);
   const [filter, setFilter] = useState('');
   const [busySuggestionId, setBusySuggestionId] = useState('');
+  const [successMsg, setSuccessMsg] = useState(null); // {projectId, text, taskCount, phases}
+  const navigate = useNavigate();
 
   const load = () => listProjects().then(setProjects).catch(() => {});
 
@@ -57,18 +63,36 @@ export default function Projects() {
   const filtered = filter ? projects.filter((p) => p.category === filter) : projects;
 
   const countByStatus = (label) => projects.filter((p) => getStatusInfo(p).label === label).length;
-  const runningCount = countByStatus('Running');
+  const liveCount = projects.filter(p => {
+    const s = (p.status || '').toLowerCase();
+    return s === 'online' || s === 'running';
+  }).length;
   const idleCount = countByStatus('Idle');
   const offlineCount = countByStatus('Offline');
 
-  const handleSuggestion = async (suggestion) => {
+  const handleSuggestion = async (suggestion, projectId) => {
     if (!suggestion?.prompt) return;
     setBusySuggestionId(suggestion.id);
+    setSuccessMsg(null);
     try {
-      await executeSmartIssue(suggestion.prompt);
-      window.alert(`Created workflow tasks for: ${suggestion.title}`);
+      const result = await executeSmartIssue(suggestion.prompt);
+      setSuccessMsg({
+        projectId,
+        text: suggestion.title,
+        taskCount: result.total_created || 0,
+        phases: result.total_phases || 0,
+      });
+      // Auto-dismiss after 8 seconds
+      setTimeout(() => setSuccessMsg(null), 8000);
     } catch (error) {
-      window.alert(`Could not create workflow tasks: ${error.message}`);
+      setSuccessMsg({
+        projectId,
+        text: `Error: ${error.message}`,
+        taskCount: 0,
+        phases: 0,
+        isError: true,
+      });
+      setTimeout(() => setSuccessMsg(null), 5000);
     } finally {
       setBusySuggestionId('');
     }
@@ -80,7 +104,7 @@ export default function Projects() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <h1>Projects</h1>
           <span className="text-secondary" style={{ fontSize: 13 }}>
-            {runningCount}/{projects.length} running
+            {liveCount}/{projects.length} live
           </span>
         </div>
         <div className="tab-bar">
@@ -97,8 +121,8 @@ export default function Projects() {
 
       <div className="stats-row" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         <div className="stat-card">
-          <div className="stat-label">Running</div>
-          <div className="stat-value green">{runningCount}</div>
+          <div className="stat-label">Live / Running</div>
+          <div className="stat-value green">{liveCount}</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Idle</div>
@@ -132,8 +156,26 @@ export default function Projects() {
                   <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 2 }}>{p.name}</div>
                   <div className="text-dim" style={{ fontSize: 12 }}>{p.id}</div>
                 </div>
-                <span className={status.cls}>{status.label}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {p.latency_ms != null && (
+                    <span className="mono" style={{ fontSize: 10, color: 'var(--text-muted)' }}>{p.latency_ms}ms</span>
+                  )}
+                  <span className={status.cls}>{status.label}</span>
+                </div>
               </div>
+
+              {/* Live URL link */}
+              {p.url && (p.status === 'online' || p.status === 'running') && (
+                <div style={{ marginBottom: 8 }}>
+                  <a href={p.url} target="_blank" rel="noopener noreferrer" style={{
+                    fontSize: 11, color: 'var(--green)', textDecoration: 'none',
+                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                  }}>
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--green)', display: 'inline-block', animation: 'pulse 2s infinite' }} />
+                    {p.url.replace('https://', '')}
+                  </a>
+                </div>
+              )}
 
               <div className="text-secondary" style={{ fontSize: 12, marginBottom: 12, lineHeight: 1.5 }}>
                 {p.description}
@@ -269,7 +311,7 @@ export default function Projects() {
                         <div className="project-feed-sub">{suggestion.description}</div>
                         <button
                           className="btn btn-ghost btn-sm"
-                          onClick={() => handleSuggestion(suggestion)}
+                          onClick={() => handleSuggestion(suggestion, p.id)}
                           disabled={busySuggestionId === suggestion.id}
                         >
                           {busySuggestionId === suggestion.id ? 'Creating...' : suggestion.action_label}
@@ -318,7 +360,7 @@ export default function Projects() {
                         <div className="project-feed-sub">{suggestion.description}</div>
                         <button
                           className="btn btn-ghost btn-sm"
-                          onClick={() => handleSuggestion(suggestion)}
+                          onClick={() => handleSuggestion(suggestion, p.id)}
                           disabled={busySuggestionId === suggestion.id}
                         >
                           {busySuggestionId === suggestion.id ? 'Creating...' : suggestion.action_label}
@@ -326,6 +368,32 @@ export default function Projects() {
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* Inline success/error banner for workflow creation */}
+              {successMsg && successMsg.projectId === p.id && (
+                <div style={{
+                  marginTop: 10, padding: '8px 12px',
+                  borderRadius: 'var(--radius)',
+                  background: successMsg.isError ? 'var(--red-bg)' : 'var(--green-bg)',
+                  border: `1px solid ${successMsg.isError ? 'rgba(255,107,107,0.3)' : 'rgba(81,207,102,0.3)'}`,
+                  fontSize: 12,
+                  color: successMsg.isError ? 'var(--red)' : 'var(--green)',
+                }}>
+                  {successMsg.isError ? (
+                    <span>{successMsg.text}</span>
+                  ) : (
+                    <span>
+                      Workflow created — {successMsg.taskCount} tasks across {successMsg.phases} phases.{' '}
+                      <span
+                        onClick={() => navigate('/issues')}
+                        style={{ textDecoration: 'underline', cursor: 'pointer', fontWeight: 600 }}
+                      >
+                        View in Issues
+                      </span>
+                    </span>
+                  )}
                 </div>
               )}
 
