@@ -406,10 +406,20 @@ class IntegrationConnector(BaseConnector):
                     )
 
                 results = watcher.poll()
+                error_count = sum(
+                    1 for r in results
+                    if r.get("status") in ("error", "failed")
+                )
+                all_ok = error_count == 0 and len(results) > 0
+                has_results = len(results) > 0
                 return ConnectorResult(
-                    success=True,
-                    message=f"Drive poll: {len(results)} files processed",
-                    data={"files": results, "config": poll_status},
+                    success=all_ok or not has_results,
+                    message=(
+                        f"Drive poll: {len(results)} files processed, {error_count} errors"
+                        if has_results
+                        else "Drive poll: no new files found"
+                    ),
+                    data={"files": results, "config": poll_status, "error_count": error_count},
                     duration_ms=(datetime.now(timezone.utc) - start).total_seconds() * 1000,
                 )
             except Exception as e:
