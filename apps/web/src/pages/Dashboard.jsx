@@ -34,7 +34,7 @@ export default function Dashboard() {
     getStats().then(setStats).catch(() => {});
     listTasks().then((items) => setRecentTasks(items.slice(0, 8))).catch(() => {});
     listRuntimeAgents().then(setAgents).catch(() => {});
-    getMarketingStores().then(setStores).catch(() => setStores([]));
+    getMarketingStores().then(r => setStores(r?.stores || r || [])).catch(() => setStores([]));
   };
 
   useEffect(() => {
@@ -336,17 +336,20 @@ export default function Dashboard() {
               {stores.length === 0 && (
                 <div className="project-feed-empty">No marketing stores connected yet.</div>
               )}
-              {stores.map((store) => (
-                <div key={store.id || store.name} className="project-feed-row">
-                  <div>
-                    <div className="project-feed-title">{store.name || store.id}</div>
-                    <div className="project-feed-sub">{formatStamp(store.last_updated)}</div>
+              {stores.map((store) => {
+                const revenue = store.data?.revenue ?? store.revenue;
+                return (
+                  <div key={store.id || store.label} className="project-feed-row">
+                    <div>
+                      <div className="project-feed-title">{store.label || store.name || store.id}</div>
+                      <div className="project-feed-sub">{formatStamp(store.last_updated)}</div>
+                    </div>
+                    <div className="dashboard-store-value">
+                      {revenue != null ? formatMoney(revenue) : '--'}
+                    </div>
                   </div>
-                  <div className="dashboard-store-value">
-                    {store.revenue !== undefined && store.revenue !== null ? formatMoney(store.revenue) : '--'}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </section>
         </div>
