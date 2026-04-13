@@ -236,46 +236,64 @@ class ContentValidator:
             "details": f"All {len(links)} links OK" if not broken else f"Broken links: {broken}",
         }
 
-    # ── Check 7: Cultural Review ───────────────────────────────────────
+    # ── Check 7: Cultural + Editorial Review (LLM) ──────────────────────
 
     def _check_cultural_review(self, html: str, cfg: dict) -> dict:
-        """Quick LLM check for cultural sensitivity."""
-        # Extract text content
+        """Full LLM editorial compliance review using the validation prompt."""
         clean = re.sub(r"<[^>]+>", " ", html)
         clean = re.sub(r"\s+", " ", clean).strip()
-
-        # Take a sample (first 500 words to save tokens)
-        sample = " ".join(clean.split()[:500])
+        sample = " ".join(clean.split()[:800])
 
         try:
+            from core.content.prompts import PROMPT_VALIDATION
+            from core.content.store_data import get_verified_business_data, get_verified_menu_data
+
+            brand = "bakudan"  # infer from cfg
+            for b_key in ["bakudan", "raw"]:
+                from core.content.store_data import get_brand_config as _gbc
+                if _gbc(b_key).get("brand_name") == cfg.get("brand_name"):
+                    brand = b_key
+                    break
+
+            prompt = PROMPT_VALIDATION.format(
+                generated_post=sample,
+                verified_business_data=get_verified_business_data(brand),
+                verified_menu_data=get_verified_menu_data(brand),
+            )
+
             from core.llm.router import LLMRouter
             router = LLMRouter()
             result = router.complete(
-                prompt=f"Review this restaurant blog content for cultural sensitivity issues. "
-                       f"The restaurant is {cfg.get('brand_name', '')} ({cfg.get('cuisine', '')}).\n\n"
-                       f"Content sample:\n{sample}\n\n"
-                       f"Return JSON: {{\"passed\": true/false, \"issues\": [\"issue1\", ...]}}",
-                system="You are a cultural sensitivity reviewer. Flag only real issues — stereotypes, "
-                       "incorrect cultural claims, offensive language. Minor style issues are fine.",
+                prompt=prompt,
+                system="You are the final editorial compliance reviewer. Return JSON only.",
                 task_type="default",
-                description="Cultural review",
-                max_tokens=256,
+                description="Editorial compliance review",
+                max_tokens=1024,
                 temperature=0.3,
             )
-            # Parse result
+            # Parse validation result
             text = result.strip()
             start = text.find("{")
             end = text.rfind("}") + 1
             if start >= 0 and end > start:
                 data = json.loads(text[start:end])
-                issues = data.get("issues", [])
+                decision = data.get("publish_decision", "PASS")
+                issues = data.get("issues_found", data.get("issues", []))
+                risk = data.get("risk_level", "LOW")
                 return {
                     "name": "cultural_review",
-                    "passed": data.get("passed", True),
-                    "details": "No cultural issues" if not issues else f"Issues: {'; '.join(issues)}",
+                    "passed": decision == "PASS",
+                    "details": (
+                        f"Editorial review PASS (risk: {risk})"
+                        if decision == "PASS"
+                        else f"Editorial review FAIL (risk: {risk}): {'; '.join(issues[:3])}"
+                    ),
+                    "risk_level": risk,
+                    "phrases_to_fix": data.get("exact_phrases_to_fix", []),
+                    "editor_notes": data.get("final_editor_notes", ""),
                 }
         except Exception as exc:
-            logger.warning("Cultural review LLM call failed: %s", exc)
+            logger.warning("Editorial review LLM call failed: %s", exc)
 
         # If LLM fails, pass by default (don't block on infra issues)
         return {"name": "cultural_review", "passed": True, "details": "LLM review skipped (fallback pass)"}

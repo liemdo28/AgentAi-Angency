@@ -143,3 +143,74 @@ def get_store_context(brand: str) -> str:
     lines.append(f"Signature dishes: {', '.join(cfg.get('signature_dishes', []))}")
     lines.append(f"Brand tone: {cfg.get('brand_tone', '')}")
     return "\n".join(lines)
+
+
+def get_verified_business_data(brand: str) -> str:
+    """Structured verified business data for prompt injection."""
+    cfg = get_brand_config(brand)
+    if not cfg:
+        return ""
+    lines = [f"Brand: {cfg['brand_name']}", f"Cuisine: {cfg['cuisine']}", f"City: {cfg['city']}"]
+    for sid, store in cfg.get("stores", {}).items():
+        lines.append(f"Location [{sid}]: {store['name']}")
+        lines.append(f"  Address: {store['address']}")
+        lines.append(f"  Phone: {store['phone']}")
+        if store.get("hours"):
+            lines.append(f"  Hours: {store['hours']}")
+    return "\n".join(lines)
+
+
+def get_verified_menu_data(brand: str) -> str:
+    """Structured verified menu data. Only items we KNOW exist."""
+    cfg = get_brand_config(brand)
+    if not cfg:
+        return "No verified menu data available."
+    dishes = cfg.get("signature_dishes", [])
+    if not dishes:
+        return "No verified menu items. Do not name specific dishes."
+    return "Verified menu items:\n" + "\n".join(f"- {d}" for d in dishes)
+
+
+def get_local_context(brand: str) -> str:
+    """Local area context for the brand."""
+    cfg = get_brand_config(brand)
+    if not cfg:
+        return ""
+    lines = [f"City: {cfg['city']}"]
+    for sid, store in cfg.get("stores", {}).items():
+        if store.get("area_context"):
+            lines.append(f"  {store['name']}: {store['area_context']}")
+    themes = cfg.get("local_themes", [])
+    if themes:
+        lines.append("Local themes: " + ", ".join(themes[:5]))
+    return "\n".join(lines)
+
+
+def get_traveler_context(brand: str) -> str:
+    """Tourist/traveler context for the brand."""
+    cfg = get_brand_config(brand)
+    if not cfg:
+        return ""
+    themes = cfg.get("tourist_themes", [])
+    return "Traveler angles: " + ", ".join(themes[:5]) if themes else ""
+
+
+def get_surrounding_audience(brand: str) -> str:
+    """Surrounding audience profile."""
+    cfg = get_brand_config(brand)
+    if not cfg:
+        return ""
+    parts = [f"Market: {cfg['city']}"]
+    for sid, store in cfg.get("stores", {}).items():
+        if store.get("area_context"):
+            parts.append(f"  {sid}: {store['area_context']}")
+    return "\n".join(parts)
+
+
+def get_verified_cta_links(brand: str) -> str:
+    """Verified CTA links for the brand."""
+    cfg = get_brand_config(brand)
+    if not cfg:
+        return ""
+    domain = cfg.get("website_domain", "")
+    return f"Website: https://{domain}\nMenu: https://{domain}/menu.html\nOrder: https://{domain}/order.html"

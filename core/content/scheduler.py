@@ -16,11 +16,12 @@ from core.content.store_data import BRAND_CONFIG
 
 logger = logging.getLogger("content.scheduler")
 
-# Schedule: 3 slots per day per brand
+# Schedule: 3 slots per day per brand (from rotation policy)
+# Morning = Viral/Attention, Midday = Conversion/Order, Evening = rotating
 SCHEDULE = [
-    {"slot": "morning", "hour": 8, "content_type": "tourist"},
-    {"slot": "noon", "hour": 12, "content_type": "local"},
-    {"slot": "evening", "hour": 18, "content_type": "menu"},
+    {"slot": "morning", "hour": 8, "content_type": "viral"},
+    {"slot": "midday", "hour": 12, "content_type": "conversion"},
+    {"slot": "evening", "hour": 18, "content_type": "rotating"},  # resolved at runtime
 ]
 
 # Brands to generate content for
@@ -58,6 +59,11 @@ class ContentScheduler:
                 slot = slot_def["slot"]
                 trigger_hour = slot_def["hour"]
                 content_type = slot_def["content_type"]
+
+                # Resolve rotating evening slot based on day of week
+                if content_type == "rotating":
+                    from core.content.prompts import get_evening_type
+                    content_type = get_evening_type(now.weekday())
 
                 # Only trigger if we've reached or passed the scheduled hour
                 if current_hour < trigger_hour:

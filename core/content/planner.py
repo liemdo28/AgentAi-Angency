@@ -11,11 +11,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from core.content.store_data import get_brand_config, get_store_context
+from core.content.store_data import get_brand_config, get_store_context, get_verified_business_data, get_verified_menu_data
+from core.content.prompts import ROTATION_POLICY, get_evening_type
 
 logger = logging.getLogger("content.planner")
 
 CONTENT_TYPE_GUIDANCE = {
+    "viral": "High-attention post. Maximize clicks and curiosity. Emotional pull, food appeal, local relevance.",
+    "conversion": "Convert readers to customers. Emphasize convenience, appetite appeal, decision clarity. Strong CTA.",
+    "local_discovery": "Locally relevant. Build trust with nearby audiences. Neighborhood-aware, welcoming.",
+    "tourist_discovery": "For visitors and travelers. Memorable, convenient, confidence-building for first-timers.",
+    "menu_highlight": "Menu highlights and brand trust. Signature items, sensory descriptions, quality signals.",
+    # Legacy mappings
     "tourist": "Write for visitors and travelers discovering the city. Help them find great food. Be enthusiastic and informative.",
     "local": "Write for regular local customers and the community. Be warm, personal, community-focused.",
     "menu": "Deep-dive into a menu item, cooking technique, or ingredient. Be detailed and passionate about the craft.",

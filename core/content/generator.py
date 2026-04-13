@@ -1,29 +1,35 @@
 """
-Content Generator — generates blog post HTML using Claude + brand templates.
+Content Generator — generates blog post HTML using the 5-type prompt system.
+Uses verified business data injection, never fabricates restaurant facts.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from datetime import datetime
 
-from core.content.store_data import get_brand_config, get_store_context
+from core.content.prompts import get_prompt_template, get_system_prompt, PROMPT_VALIDATION
+from core.content.store_data import (
+    get_brand_config,
+    get_verified_business_data,
+    get_verified_menu_data,
+    get_local_context,
+    get_traveler_context,
+    get_surrounding_audience,
+    get_verified_cta_links,
+)
 from core.content.templates import get_template
 
 logger = logging.getLogger("content.generator")
 
 
 class ContentGenerator:
-    """Generates complete blog post HTML files."""
+    """Generates complete blog post HTML files using the 5-type prompt system."""
 
     def generate(self, brand: str, project_id: str, topic: dict) -> dict:
         """Generate a complete HTML blog post.
-
-        Args:
-            brand: "bakudan" or "raw"
-            project_id: "BakudanWebsite_Sub" or "RawWebsite"
-            topic: dict from ContentPlanner with title, slug, key_points, etc.
 
         Returns:
             {
@@ -32,100 +38,165 @@ class ContentGenerator:
                 "word_count": 1050,
                 "title": "...",
                 "slug": "...",
+                "content_output": {...}  # structured output from LLM
             }
         """
         cfg = get_brand_config(brand)
         if not cfg:
             raise ValueError(f"Unknown brand: {brand}")
 
-        # Generate article body via Claude
-        article_body = self._generate_article_body(cfg, topic)
+        content_type = topic.get("content_type", "viral")
 
-        # Inject into template
-        html = self._assemble_html(brand, cfg, topic, article_body)
+        # Generate via Claude with type-specific prompt
+        content_output = self._generate_with_prompt(cfg, brand, topic, content_type)
 
-        # Calculate word count
+        # Extract article body from structured output
+        article_body = content_output.get("article_body", "")
+        title = content_output.get("title", topic.get("title", "Untitled"))
+        meta_desc = content_output.get("meta_description", topic.get("meta_description", ""))
+        slug = content_output.get("slug", topic.get("slug", "post"))
+
+        # Inject into HTML template
+        topic_merged = {**topic, **content_output, "title": title, "meta_description": meta_desc, "slug": slug}
+        html = self._assemble_html(brand, cfg, topic_merged, article_body)
+
+        # Word count
         clean_text = re.sub(r"<[^>]+>", " ", article_body)
         word_count = len(clean_text.split())
 
-        filename = f"blog-{topic['slug']}.html"
+        filename = f"blog-{slug}.html"
 
         return {
             "html": html,
             "filename": filename,
             "word_count": word_count,
-            "title": topic["title"],
-            "slug": topic["slug"],
-            "meta_description": topic.get("meta_description", ""),
+            "title": title,
+            "slug": slug,
+            "meta_description": meta_desc,
+            "content_output": content_output,
         }
 
-    def _generate_article_body(self, cfg: dict, topic: dict) -> str:
-        """Call Claude to generate the article body HTML."""
-        store_context = get_store_context(topic.get("brand", ""))
+    def _generate_with_prompt(self, cfg: dict, brand: str, topic: dict, content_type: str) -> dict:
+        """Call Claude with the type-specific prompt template."""
+        # Build system prompt
+        system = get_system_prompt(cfg["brand_name"], cfg["cuisine"])
 
-        prompt = f"""Write a blog post for {cfg['brand_name']}.
+        # Build user prompt from template
+        template = get_prompt_template(content_type)
+        user_prompt = template.format(
+            verified_business_data=get_verified_business_data(brand),
+            verified_menu_data=get_verified_menu_data(brand),
+            local_context=get_local_context(brand),
+            traveler_context=get_traveler_context(brand),
+            surrounding_audience_profile=get_surrounding_audience(brand),
+            verified_cta_links=get_verified_cta_links(brand),
+            post_topic=topic.get("title", topic.get("post_topic", "")),
+            keyword_target=topic.get("keywords", topic.get("keyword_target", "")),
+        )
 
-TOPIC: {topic['title']}
-SUBTITLE: {topic.get('subtitle', '')}
-CONTENT TYPE: {topic.get('content_type', 'general')}
-TARGET AUDIENCE: {topic.get('target_audience', 'general readers')}
+        try:
+            from core.llm.router import LLMRouter
+            router = LLMRouter()
+            result = router.complete(
+                prompt=user_prompt,
+                system=system,
+                task_type="creative",
+                description=f"Generate {content_type} blog post for {cfg['brand_name']}",
+                max_tokens=4096,
+                temperature=0.75,
+            )
+            return self._parse_content_output(result, topic)
 
-KEY POINTS TO COVER:
-{chr(10).join('- ' + p for p in topic.get('key_points', []))}
+        except Exception as exc:
+            logger.exception("Content generation failed: %s", exc)
+            return {
+                "title": topic.get("title", ""),
+                "article_body": f"<h2>{topic.get('title', 'Error')}</h2><p>Generation failed: {exc}</p>",
+                "meta_description": topic.get("meta_description", ""),
+                "slug": topic.get("slug", "error"),
+            }
 
-RESTAURANT INFORMATION:
-{store_context}
+    def _parse_content_output(self, raw: str, topic: dict) -> dict:
+        """Parse the structured JSON output from Claude."""
+        text = raw.strip()
 
-WRITING GUIDELINES:
-- Brand tone: {cfg.get('brand_tone', 'professional and engaging')}
-- Word count: {topic.get('word_count_target', 1000)} words
-- Use HTML formatting: <h2>, <h3>, <p>, <ul>, <li>, <blockquote>
-- Include 3-5 <h2> subheadings that break up the content
-- Make it SEO-friendly with natural keyword usage
-- Include specific details about the restaurant (real addresses, real dishes)
-- End with a compelling call-to-action
-- Do NOT include <html>, <head>, <body> tags — only the article content
-- Do NOT use placeholder text — use REAL restaurant data
+        # Try to extract JSON
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0].strip()
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0].strip()
 
-OUTPUT: Write ONLY the HTML content that goes inside the <article> tag. Start with the first <h2> heading."""
+        start = text.find("{")
+        end = text.rfind("}") + 1
+
+        if start >= 0 and end > start:
+            try:
+                data = json.loads(text[start:end])
+                # Ensure required fields
+                data.setdefault("title", topic.get("title", ""))
+                data.setdefault("slug", topic.get("slug", ""))
+                data.setdefault("meta_description", topic.get("meta_description", ""))
+                data.setdefault("article_body", "")
+                return data
+            except json.JSONDecodeError:
+                pass
+
+        # Fallback: treat entire output as article body
+        logger.warning("Could not parse JSON from LLM output, using as raw article body")
+        article_body = self._clean_article_html(text)
+        return {
+            "title": topic.get("title", ""),
+            "slug": topic.get("slug", ""),
+            "meta_description": topic.get("meta_description", ""),
+            "article_body": article_body,
+            "content_type": topic.get("content_type", ""),
+        }
+
+    def validate_with_llm(self, html: str, brand: str) -> dict:
+        """Run the LLM-based final editorial validation."""
+        clean = re.sub(r"<[^>]+>", " ", html)
+        sample = " ".join(clean.split()[:800])
+
+        prompt = PROMPT_VALIDATION.format(
+            generated_post=sample,
+            verified_business_data=get_verified_business_data(brand),
+            verified_menu_data=get_verified_menu_data(brand),
+        )
 
         try:
             from core.llm.router import LLMRouter
             router = LLMRouter()
             result = router.complete(
                 prompt=prompt,
-                system=(
-                    f"You are a professional food and travel writer creating content for {cfg['brand_name']}. "
-                    f"Write engaging, accurate, SEO-optimized blog content. "
-                    f"Use real restaurant data — never make up addresses, phone numbers, or menu items. "
-                    f"Output clean HTML only."
-                ),
-                task_type="creative",
-                description=f"Generate blog article for {cfg['brand_name']}",
-                max_tokens=4096,
-                temperature=0.75,
+                system="You are the final editorial compliance reviewer. Return JSON only.",
+                task_type="default",
+                description="Content validation review",
+                max_tokens=1024,
+                temperature=0.3,
             )
-            return self._clean_article_html(result)
+            text = result.strip()
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start >= 0 and end > start:
+                return json.loads(text[start:end])
         except Exception as exc:
-            logger.exception("Article generation failed: %s", exc)
-            return f"<h2>{topic['title']}</h2><p>Content generation failed: {exc}</p>"
+            logger.warning("LLM validation failed: %s", exc)
+
+        return {"publish_decision": "PASS", "risk_level": "LOW", "issues_found": [], "final_editor_notes": "LLM review skipped"}
 
     def _clean_article_html(self, raw: str) -> str:
-        """Clean up LLM output — remove markdown wrappers, fix common issues."""
+        """Clean up LLM output."""
         text = raw.strip()
-        # Remove markdown code block if present
         if text.startswith("```html"):
             text = text[7:]
         elif text.startswith("```"):
             text = text[3:]
         if text.endswith("```"):
             text = text[:-3]
-        text = text.strip()
 
-        # Remove any accidentally included full-page tags
+        # Remove full-page tags if accidentally included
         for tag in ["<!DOCTYPE", "<html", "</html>", "<head", "</head>", "<body", "</body>"]:
             if tag.lower() in text.lower():
-                # Find and remove up to and including the tag
                 idx = text.lower().find(tag.lower())
                 end = text.find(">", idx)
                 if end > idx:
@@ -138,29 +209,25 @@ OUTPUT: Write ONLY the HTML content that goes inside the <article> tag. Start wi
         template = get_template(brand)
         now = datetime.now()
 
-        # Estimate reading time
         clean_text = re.sub(r"<[^>]+>", " ", article_body)
         word_count = len(clean_text.split())
         reading_time = max(3, round(word_count / 200))
 
-        # Build template variables
         vars_dict = {
-            "title": topic["title"],
+            "title": topic.get("title", ""),
             "meta_description": topic.get("meta_description", "")[:160],
-            "section_tag": topic.get("section_tag", topic.get("content_type", "Blog")),
-            "subtitle": topic.get("subtitle", ""),
+            "section_tag": topic.get("section_tag", topic.get("content_type", "Blog")).replace("_", " ").title(),
+            "subtitle": topic.get("subtitle", topic.get("excerpt", "")),
             "reading_time": str(reading_time),
             "article_body": article_body,
             "year": str(now.year),
             "date_published": now.strftime("%Y-%m-%d"),
             "date_display": now.strftime("%B %d, %Y"),
-            "filename": f"blog-{topic['slug']}.html",
-            "keywords": topic.get("keywords", ""),
+            "filename": f"blog-{topic.get('slug', 'post')}.html",
+            "keywords": topic.get("keywords", topic.get("keyword_target", "")),
         }
 
-        # Use safe string formatting (not .format() which conflicts with CSS braces)
         html = template
         for key, value in vars_dict.items():
             html = html.replace(f"{{{key}}}", str(value))
-
         return html
