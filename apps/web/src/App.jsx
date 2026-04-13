@@ -15,7 +15,9 @@ import Activity from './pages/Activity';
 import Approvals from './pages/Approvals';
 import Settings from './pages/Settings';
 import DevPanel from './pages/DevPanel';
-import { getStats } from './api';
+import PostsReview from './pages/PostsReview';
+import PostPreview from './pages/PostPreview';
+import { getStats, getPostStats } from './api';
 import './styles.css';
 
 // ── Theme Context ─────────────────────────────────────────────
@@ -68,6 +70,7 @@ const Icon = ({ name }) => {
     costs: <svg className="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1v14M5 4h5a2 2 0 010 4H6a2 2 0 000 4h5" stroke="currentColor" strokeWidth="1.5" fill="none"/></svg>,
     activity: <svg className="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M1 8h3l2-5 3 10 2-5h4" stroke="currentColor" strokeWidth="1.5" fill="none"/></svg>,
     approvals: <svg className="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M4 8l3 3 5-6" stroke="currentColor" strokeWidth="2" fill="none"/></svg>,
+    posts: <svg className="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><rect x="2" y="2" width="12" height="2.5" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2"/><rect x="2" y="6.5" width="12" height="7" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2"/><path d="M4 9.5h8M4 11.5h5" stroke="currentColor" strokeWidth="1.2"/></svg>,
     projects: <svg className="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><rect x="2" y="2" width="12" height="12" rx="2" fill="none" stroke="currentColor" strokeWidth="1.3"/><path d="M2 6h12" stroke="currentColor" strokeWidth="1.3"/><circle cx="4.5" cy="4" r="0.8"/><circle cx="7" cy="4" r="0.8"/></svg>,
     pulse: <svg className="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M1 9h3l1.4-4 3.2 7 2-4H15" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round"/><circle cx="5.4" cy="5" r="0.8"/><circle cx="8.6" cy="12" r="0.8"/></svg>,
     stores: <svg className="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 6l1-4h10l1 4M2 6v8h12V6M4 14v-4h4v4M10 9h2v2h-2z" stroke="currentColor" strokeWidth="1.2" fill="none"/></svg>,
@@ -138,6 +141,11 @@ const PAGE_META = {
     title: 'Approvals',
     section: 'Decision Queue',
     subtitle: 'Review pending approvals and governed actions before they move forward.',
+  },
+  '/posts': {
+    title: 'Posts Review',
+    section: 'Content Approval',
+    subtitle: 'Review, approve, or request revision on AI-generated content posts before publishing.',
   },
   '/dev': {
     title: 'Dev Agent',
@@ -220,12 +228,17 @@ function ContentHeader() {
 
 function AppShell() {
   const [stats, setStats] = useState(null);
+  const [postsPending, setPostsPending] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
 
   useEffect(() => {
     getStats().then(setStats).catch(() => {});
-    const t = setInterval(() => getStats().then(setStats).catch(() => {}), 5000);
+    getPostStats().then((r) => setPostsPending(r?.pending ?? 0)).catch(() => {});
+    const t = setInterval(() => {
+      getStats().then(setStats).catch(() => {});
+      getPostStats().then((r) => setPostsPending(r?.pending ?? 0)).catch(() => {});
+    }, 10000);
     return () => clearInterval(t);
   }, []);
 
@@ -301,6 +314,10 @@ function AppShell() {
             <Icon name="approvals" /> Approvals
             {stats?.tasks?.pending > 0 && <span className="sidebar-badge">{stats.tasks.pending}</span>}
           </NavLink>
+          <NavLink to="/posts">
+            <Icon name="posts" /> Posts Review
+            {postsPending > 0 && <span className="sidebar-badge">{postsPending}</span>}
+          </NavLink>
         </div>
 
         <div className="sidebar-divider" />
@@ -338,6 +355,8 @@ function AppShell() {
           <Route path="/costs" element={<Costs />} />
           <Route path="/activity" element={<Activity />} />
           <Route path="/approvals" element={<Approvals />} />
+          <Route path="/posts" element={<PostsReview />} />
+          <Route path="/posts/:id" element={<PostPreview />} />
           <Route path="/dev" element={<DevPanel />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>

@@ -133,3 +133,36 @@ export const getLlmStats = () => request('/llm/stats');
 // Stores
 export const listStores = () => request('/stores');
 export const getStore = (id) => request(`/stores/${id}`);
+
+
+// ── Posts Review & Approval ────────────────────────────────────────────────
+export const generatePost = (data) =>
+  request('/posts/generate', { method: 'POST', body: JSON.stringify(data) });
+
+export const listReviewQueue = (params = {}) => {
+  const qs = new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v != null && v !== '')
+  ).toString();
+  return request(`/posts/review-queue${qs ? `?${qs}` : ''}`);
+};
+
+export const getPostStats = () => request('/posts/stats');
+
+export const getPost = (id) => request(`/posts/${id}`);
+
+export const approvePost = (id, data) =>
+  request(`/posts/${id}/approve`, { method: 'POST', body: JSON.stringify(data) });
+
+export const rejectPost = (id, data) =>
+  request(`/posts/${id}/reject`, { method: 'POST', body: JSON.stringify(data) });
+
+export const requestRevision = (id, data) =>
+  request(`/posts/${id}/request-revision`, { method: 'POST', body: JSON.stringify(data) });
+
+export const regeneratePost = (id, data) =>
+  request(`/posts/${id}/regenerate`, { method: 'POST', body: JSON.stringify(data) });
+
+export const publishPost = (id) =>
+  request(`/posts/${id}/publish`, { method: 'POST' });
+
+export const getPostLogs = (id) => request(`/posts/${id}/logs`);

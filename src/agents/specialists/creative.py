@@ -147,6 +147,129 @@ class CreativeSpecialist(BaseSpecialist):
             return "Sports Accessories"
         return default
 
+    # ── rawwebsite channel overrides ─────────────────────────────────
+
+    def _build_rawwebsite_system_prompt(self) -> str:
+        """System prompt for structured JSON post generation targeting rawwebsite CMS."""
+        return """You are the **Content Specialist** producing a structured blog/promo post for the Raw Sushi Bar website CMS.
+
+Output ONLY a single valid JSON object — no markdown fences, no extra commentary, no explanation.
+The JSON must be parseable by json.loads() directly.
+
+Required fields (all must be present):
+{
+  "title": "Post title (max 70 chars, SEO-optimized, engaging)",
+  "slug": "url-friendly-slug-no-spaces",
+  "excerpt": "1-2 sentence summary for previews (max 160 chars)",
+  "body_markdown": "Full post body in Markdown (400-1200 words). Include headings, bullet points, and a natural CTA.",
+  "seo_title": "SEO page title (max 60 chars)",
+  "seo_description": "Meta description (max 160 chars)",
+  "focus_keyword": "primary keyword phrase for SEO",
+  "cta_text": "CTA button label (e.g. 'Order Now', 'View Menu')",
+  "cta_url": "CTA URL from the task, or empty string if not provided",
+  "featured_image_prompt": "Detailed image generation prompt for the hero image (for DALL-E or Midjourney)",
+  "tags": ["tag1", "tag2", "tag3"]
+}
+
+Rules:
+- body_markdown must be real, publication-ready content — not a template or placeholder.
+- Write in an inviting, upscale-casual tone appropriate for a sushi restaurant brand.
+- All string values must properly escape any internal double-quotes.
+- Do NOT add any fields beyond those listed above.
+"""
+
+    def _build_rawwebsite_fallback(self, state: dict) -> str:
+        """Structured JSON fallback for rawwebsite when no LLM is available."""
+        import json as _json
+        meta = state.get("metadata") or {}
+        brand = meta.get("brand_name") or "Raw Sushi Bar"
+        keyword = meta.get("focus_keyword") or "sushi"
+        post_type = meta.get("post_type") or "blog"
+        cta_url = meta.get("cta_url") or ""
+        slug_base = f"{brand.lower().replace(' ', '-')}-{keyword.lower().replace(' ', '-')}"
+
+        return _json.dumps(
+            {
+                "title": f"{brand} — {keyword.title()} Experience",
+                "slug": slug_base[:60],
+                "excerpt": f"Discover {brand}'s fresh take on {keyword}. Quality ingredients, artful presentation.",
+                "body_markdown": (
+                    f"## The {brand} Difference\n\n"
+                    f"At {brand}, we believe every dish should be a moment worth savoring. "
+                    f"Our {keyword} is crafted fresh daily using sustainably sourced ingredients.\n\n"
+                    "## What Makes Us Special\n\n"
+                    "- **Fresh daily:** Our chefs prep each morning\n"
+                    "- **Quality first:** Only the finest seasonal ingredients\n"
+                    "- **Artful presentation:** Every plate is a work of craft\n\n"
+                    "## Visit Us\n\n"
+                    f"Come experience {brand} for yourself. Reserve a table or order online today."
+                ),
+                "seo_title": f"{brand} {keyword.title()} | Fresh & Premium",
+                "seo_description": f"Experience {brand}'s premium {keyword}. Fresh ingredients, artful presentation, unforgettable dining.",
+                "focus_keyword": keyword,
+                "cta_text": "Order Now" if post_type in ("promo", "landing-content") else "View Menu",
+                "cta_url": cta_url,
+                "featured_image_prompt": (
+                    f"Professional food photography of premium {keyword}, minimalist plate presentation, "
+                    "natural lighting, restaurant setting, high resolution, commercial quality"
+                ),
+                "tags": [keyword, "sushi", "japanese cuisine", brand.lower()],
+            },
+            indent=2,
+        )
+
+    def generate(self, state: dict) -> dict:
+        """Override: when channel='rawwebsite', use JSON-structured prompt and parsing."""
+        import json as _json, re as _re
+        channel = (state.get("metadata") or {}).get("channel", "")
+
+        if channel != "rawwebsite":
+            return super().generate(state)
+
+        system = self._build_rawwebsite_system_prompt()
+        user = self.build_user_prompt(state)
+
+        try:
+            from src.llm import get_llm
+            llm = self._llm or get_llm()
+            if llm.primary_provider is None:
+                raise RuntimeError("No LLM provider available")
+
+            raw = llm.complete(
+                prompt=user,
+                system=system,
+                temperature=0.6,
+                max_tokens=4096,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "[creative/rawwebsite] LLM failed, using fallback: %s", exc
+            )
+            raw = self._build_rawwebsite_fallback(state)
+
+        # Attempt to extract JSON (handle markdown fences)
+        cleaned = raw.strip()
+        fence_match = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, _re.DOTALL)
+        if fence_match:
+            cleaned = fence_match.group(1)
+        else:
+            # Find the first { ... } block
+            brace_match = _re.search(r"\{.*\}", cleaned, _re.DOTALL)
+            if brace_match:
+                cleaned = brace_match.group(0)
+
+        try:
+            parsed = _json.loads(cleaned)
+        except Exception:
+            parsed = {}
+
+        return {
+            "specialist_output": cleaned,
+            "generated_outputs": parsed,
+            "rawwebsite_post": parsed,
+        }
+
     # ── System prompt (original) ─────────────────────────────────────
 
     def build_system_prompt(self) -> str:

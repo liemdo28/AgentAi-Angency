@@ -43,6 +43,7 @@ from core.orchestrator.registry import AgentRegistry
 from core.policies.engine import PolicyEngine
 from core.orchestrator.engine import Orchestrator
 from apps.worker.heartbeat import build_registry
+from apps.api.routers.posts import router as posts_router
 
 # ── App setup ─────────────────────────────────────────────────────────
 
@@ -76,6 +77,9 @@ for _agent_info in registry.list_agents():
         model=_agent_info.get("model", ""),
         budget_limit=50.0,
     )
+
+# ── Posts Review & Approval module ────────────────────────────────────
+app.include_router(posts_router, prefix="/posts")
 
 
 # ── Request / Response models ─────────────────────────────────────────
