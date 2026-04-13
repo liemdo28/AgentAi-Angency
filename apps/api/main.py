@@ -547,13 +547,13 @@ def content_generate(body: ContentGenerateRequest):
         },
     )
 
-    # Execute immediately
-    from core.orchestrator.executor import AgentExecutor
+    # Execute immediately using ContentAgent (full pipeline: plan → generate → validate)
+    from core.agents.content_agent import ContentAgent
+    agent = ContentAgent()
     db.update_task_status(task["id"], "running")
     try:
-        executor = AgentExecutor()
-        result = executor.execute(db.get_task(task["id"]))
-        if result.get("status") == "success":
+        result = agent.run(db.get_task(task["id"]))
+        if result.get("status") == "done":
             db.update_task_status(task["id"], "success")
             db.save_job(
                 task_id=task["id"],
