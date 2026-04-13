@@ -448,6 +448,211 @@ def llm_stats():
     return get_router().get_stats()
 
 
+# ── Content Generation ────────────────────────────────────────────────
+
+class ContentGenerateRequest(BaseModel):
+    brand: str = "bakudan"
+    content_type: str = "tourist"  # tourist, local, menu
+
+
+@app.get("/content/status")
+def content_status():
+    """Today's content generation status per brand."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    tasks = db.list_tasks(limit=200)
+    content_tasks = [
+        t for t in tasks
+        if t.get("task_type") == "content_generation"
+    ]
+
+    # Group by brand
+    brands = {}
+    for t in content_tasks:
+        ctx = t.get("context_json", {})
+        if isinstance(ctx, str):
+            import json as _json
+            try: ctx = _json.loads(ctx)
+            except: ctx = {}
+        brand = ctx.get("brand", "unknown")
+        if brand not in brands:
+            brands[brand] = {"scheduled": 0, "pending": 0, "success": 0, "failed": 0, "posts": []}
+        brands[brand]["scheduled"] += 1
+        brands[brand][t.get("status", "pending")] = brands[brand].get(t.get("status", "pending"), 0) + 1
+        brands[brand]["posts"].append({
+            "id": t["id"],
+            "title": t["title"],
+            "status": t["status"],
+            "slot": ctx.get("slot", ""),
+            "content_type": ctx.get("content_type", ""),
+            "date": ctx.get("schedule_date", ""),
+        })
+
+    return {"today": today, "brands": brands, "total_content_tasks": len(content_tasks)}
+
+
+@app.get("/content/history")
+def content_history(limit: int = 50):
+    """All generated content posts."""
+    tasks = db.list_tasks(limit=limit)
+    content_tasks = [t for t in tasks if t.get("task_type") == "content_generation"]
+    return {"count": len(content_tasks), "posts": content_tasks}
+
+
+@app.get("/content/history/{task_id}")
+def content_detail(task_id: str):
+    """Single post detail with HTML preview and validation."""
+    task = db.get_task(task_id)
+    if not task:
+        raise HTTPException(404, "Content task not found")
+    jobs = db.list_jobs(task_id=task_id)
+    # Get the latest job output which contains HTML + validation
+    latest_output = None
+    for j in jobs:
+        if j.get("output_json"):
+            out = j["output_json"]
+            if isinstance(out, str):
+                import json as _json
+                try: out = _json.loads(out)
+                except: out = {}
+            if out.get("html") or out.get("validation"):
+                latest_output = out
+    return {"task": task, "jobs": jobs, "content_output": latest_output}
+
+
+@app.post("/content/generate")
+def content_generate(body: ContentGenerateRequest):
+    """Manually trigger content generation for a brand/content_type."""
+    from core.content.store_data import BRAND_CONFIG
+    cfg = BRAND_CONFIG.get(body.brand)
+    if not cfg:
+        raise HTTPException(400, f"Unknown brand: {body.brand}")
+
+    project_id = cfg.get("project_id", "")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    task = db.create_task(
+        title=f"[Content] {body.brand.title()} — {body.content_type} post (manual)",
+        assigned_agent_id="content-agent",
+        description=f"Generate a {body.content_type}-focused blog post for {cfg['brand_name']}.",
+        task_type="content_generation",
+        priority=3,
+        context_json={
+            "source": "manual",
+            "brand": body.brand,
+            "project_id": project_id,
+            "slot": "manual",
+            "content_type": body.content_type,
+            "schedule_date": today,
+            "schedule_key": f"content:{body.brand}:{today}:manual",
+        },
+    )
+
+    # Execute immediately
+    from core.orchestrator.executor import AgentExecutor
+    db.update_task_status(task["id"], "running")
+    try:
+        executor = AgentExecutor()
+        result = executor.execute(db.get_task(task["id"]))
+        if result.get("status") == "success":
+            db.update_task_status(task["id"], "success")
+            db.save_job(
+                task_id=task["id"],
+                agent_id="content-agent",
+                input_data={"brand": body.brand, "content_type": body.content_type},
+                output_data=result,
+            )
+        else:
+            db.update_task_status(task["id"], "failed")
+        return {"task": task, "result": result}
+    except Exception as exc:
+        db.update_task_status(task["id"], "failed")
+        return {"task": task, "result": {"status": "error", "error": str(exc)}}
+
+
+@app.post("/content/approve/{task_id}")
+def content_approve(task_id: str):
+    """Approve a generated post — triggers git publish."""
+    task = db.get_task(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+
+    # Get the generated HTML from the latest job output
+    jobs = db.list_jobs(task_id=task_id)
+    html = None
+    topic = None
+    project_id = None
+
+    for j in jobs:
+        out = j.get("output_json", {})
+        if isinstance(out, str):
+            import json as _json
+            try: out = _json.loads(out)
+            except: continue
+        if out.get("html"):
+            html = out["html"]
+            topic = out.get("topic", {})
+            project_id = out.get("project_id")
+            break
+
+    if not html:
+        raise HTTPException(400, "No generated HTML found for this task")
+
+    # Publish via git
+    from core.content.publisher import ContentPublisher
+    publisher = ContentPublisher()
+    slug = topic.get("slug", task_id[:8]) if topic else task_id[:8]
+    result = publisher.publish(project_id or "BakudanWebsite_Sub", slug, html, topic)
+
+    return {"approved": True, "publish_result": result}
+
+
+@app.post("/content/reject/{task_id}")
+def content_reject(task_id: str, reason: str = ""):
+    """Reject a generated post."""
+    task = db.get_task(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    db.update_task_status(task_id, "cancelled")
+    return {"rejected": True, "reason": reason}
+
+
+@app.get("/content/calendar")
+def content_calendar():
+    """7-day content calendar."""
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    days = []
+    for i in range(-3, 4):
+        date = (now + timedelta(days=i)).strftime("%Y-%m-%d")
+        day_tasks = [
+            t for t in db.list_tasks(limit=500)
+            if t.get("task_type") == "content_generation"
+            and _get_task_context(t).get("schedule_date") == date
+        ]
+        days.append({
+            "date": date,
+            "is_today": i == 0,
+            "posts": [{
+                "id": t["id"],
+                "title": t["title"],
+                "status": t["status"],
+                "brand": _get_task_context(t).get("brand", ""),
+                "content_type": _get_task_context(t).get("content_type", ""),
+                "slot": _get_task_context(t).get("slot", ""),
+            } for t in day_tasks],
+        })
+    return {"calendar": days}
+
+
+def _get_task_context(task: dict) -> dict:
+    ctx = task.get("context_json", {})
+    if isinstance(ctx, str):
+        import json as _json
+        try: return _json.loads(ctx)
+        except: return {}
+    return ctx
+
+
 # ── Agents ────────────────────────────────────────────────────────────
 
 @app.post("/agents")
