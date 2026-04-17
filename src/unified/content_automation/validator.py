@@ -192,15 +192,25 @@ class ContentValidator:
         body = draft.body_markdown
         verified_business_data = self._get_verified_text()
 
-        # Pattern: claims about awards, rankings, certifications not in verified data
+        # Pattern: superlative / ranking claims — only match actual ranking language,
+        # not casual uses of words like "top" (e.g. "top for discovering" is NOT a ranking).
         fabricated_claims = re.findall(
-            r"(?:award|voted|best|top|#1|ranked|\\#1|certified|imported from)\s+[\w\s\-',]+",
+            r"(?:"
+            r"(?:award|voted|ranked)\s+[\w\s\-',]+"             # "awarded best...", "voted top..."
+            r"|best\s+(?:sushi|restaurant|food|place|spot|bar|dining)\s*(?:in|near|around|of)?"
+            r"|top[\s\-](?:rated|choice|pick|sushi|restaurant|spot|bar|dining)\b"
+            r"|#1\s+(?:sushi|restaurant|food|place|in|for)"
+            r"|certified\s+[\w\s\-',]+"
+            r"|imported\s+from\s+[\w\s\-',]+"
+            r"|finest\s+(?:sushi|food|dining|restaurant)\b"
+            r"|leading\s+(?:sushi|restaurant|dining)\b"
+            r"|premier\s+(?:sushi|restaurant|dining)\b"
+            r")",
             body, re.IGNORECASE
         )
         if fabricated_claims:
-            # Simple heuristic: if it's an extraordinary claim without context
             for claim in fabricated_claims:
-                if len(claim) > 10 and not any(
+                if len(claim.strip()) > 8 and not any(
                     v.lower() in claim.lower() for v in ["stockton", "central valley", "raw sushi bar"]
                 ):
                     issues.append(f"Unverified claim: '{claim.strip()}'")
@@ -339,10 +349,14 @@ class ContentValidator:
     def _check_exaggerated_claims(self, body: str) -> list[str]:
         issues = []
         exaggerated = [
-            (r"best\s+(?:sushi|restaurant|food)\s+(?:in|ever|you'll ever)", "Avoid 'best ever' superlatives without qualification."),
+            (r"best\s+(?:sushi|restaurant|food|dining|place|spot)\s*(?:in|near|around|of|ever|you)", "Avoid 'best [X] in/ever' superlatives."),
             (r"the\s+only\s+place\s+to\s+\w+", "Avoid 'the only place' — too absolute."),
             (r"guaranteed\s+\w+", "Avoid guaranteed outcomes."),
-            (r"you\s+will\s+never\s+\w+", "Avoid absolute negative promises."),
+            (r"you\s+will\s+(?:never|love|always)\s+\w+", "Avoid absolute outcome promises."),
+            (r"(?:unmatched|unrivaled|unparalleled|second\s+to\s+none)\s+(?:quality|freshness|experience|sushi|flavor)", "Avoid absolute quality superlatives."),
+            (r"look\s+no\s+further", "Cliché ad copy — use a specific claim instead."),
+            (r"(?:in\s+today.s\s+fast[\s-]paced|nestled\s+in\s+the\s+heart)", "Avoid generic AI filler phrases."),
+            (r"\brenowned\s+for\s+(?:being|its|their)\s+(?:best|top|finest|premier)", "Avoid 'renowned for being the best/top'."),
         ]
         for pattern, msg in exaggerated:
             if re.search(pattern, body, re.IGNORECASE):
