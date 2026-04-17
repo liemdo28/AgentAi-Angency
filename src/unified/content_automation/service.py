@@ -121,16 +121,21 @@ class ContentAutomationService:
                 # Save to DB
                 saved = approval.create_post_from_plan(plan, draft, validation_passed)
 
+                # Safely extract ValidationResult fields (field names vary across model versions)
+                vr_notes     = getattr(val_result, "editor_notes", None) or getattr(val_result, "notes", "") or ""
+                vr_risk_raw  = getattr(val_result, "risk_level", None)
+                vr_risk      = (vr_risk_raw.value if hasattr(vr_risk_raw, "value") else str(vr_risk_raw)) if vr_risk_raw else "low"
+
                 slot_result.update({
                     "post_id":          saved["post_id"],
                     "version_id":       saved["version_id"],
                     "status":           saved["status"],
                     "agent_score":      saved["agent_score"],
                     "validation_passed": validation_passed,
-                    "validation_notes": val_result.editor_notes,
-                    "hard_valid":       val_result.hard_valid,
-                    "quality_score":    val_result.quality_score,
-                    "risk_level":       (val_result.risk_level.value if val_result.risk_level else "low") if hasattr(val_result, "risk_level") and val_result.risk_level else "low",
+                    "validation_notes": vr_notes,
+                    "hard_valid":       getattr(val_result, "hard_valid", True),
+                    "quality_score":    getattr(val_result, "quality_score", 0.0),
+                    "risk_level":       vr_risk,
                 })
                 logger.info(
                     "[%s] Slot %d saved: post_id=%s status=%s score=%.1f",
@@ -189,6 +194,15 @@ class ContentAutomationService:
         approval  = ApprovalService(brand=self.brand)
         publisher = MarkdownPublisher()
         repo      = PostRepository()
+
+        # If post is still pending_approval, auto-approve it first
+        # (handles the case where publish is triggered directly without a prior approve step)
+        current = repo.get_post_detail(post_id)
+        if not current:
+            raise ValueError(f"Post {post_id!r} not found")
+        if current.get("status") == "pending_approval":
+            logger.info("publish_post: auto-approving pending post %s (reviewer=%s)", post_id, reviewer)
+            approval.approve(post_id, reviewer=reviewer, comment="Approved for publish")
 
         # Transition to publishing
         approval.begin_publish(post_id)

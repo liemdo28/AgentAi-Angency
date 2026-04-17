@@ -49,6 +49,14 @@ from uuid import uuid4
 
 logger = logging.getLogger("content.publisher")
 
+# Load .env so that RAWWEBSITE_REPO_PATH, GIT_TOKEN etc. are available
+# even when the module is imported before the main app boots.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(override=False)  # don't override already-set env vars
+except ImportError:
+    pass
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Field normaliser: accepts ContentDraft, content_automation ContentDraft,
 #  or a plain dict from the DB (post + version merged).
