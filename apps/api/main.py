@@ -29,6 +29,7 @@ from typing import Optional
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 # Ensure project root on path
@@ -44,6 +45,8 @@ from core.policies.engine import PolicyEngine
 from core.orchestrator.engine import Orchestrator
 from apps.worker.heartbeat import build_registry
 from apps.api.routers.posts import router as posts_router
+from apps.api.routers.content_automation import router as ca_router
+from apps.api.command.router import router as command_router, stream_command
 
 # ── App setup ─────────────────────────────────────────────────────────
 
@@ -80,6 +83,24 @@ for _agent_info in registry.list_agents():
 
 # ── Posts Review & Approval module ────────────────────────────────────
 app.include_router(posts_router, prefix="/posts")
+
+# ── Content Automation pipeline (plan → generate → validate → approve → publish) ──
+app.include_router(ca_router, prefix="/ca")
+
+# ── Command Router ──────────────────────────────────────────────────
+app.include_router(command_router, prefix="/command")
+
+# ── SSE streaming for command execution ──────────────────────────────
+
+@app.get("/command/stream/{job_id}")
+async def command_stream(job_id: str):
+    """SSE endpoint for streaming live command execution progress."""
+    from fastapi.responses import StreamingResponse  # noqa: E402
+    return StreamingResponse(
+        stream_command(job_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
 
 
 # ── Request / Response models ─────────────────────────────────────────
@@ -607,6 +628,18 @@ def content_approve(task_id: str):
     slug = topic.get("slug", task_id[:8]) if topic else task_id[:8]
     result = publisher.publish(project_id or "BakudanWebsite_Sub", slug, html, topic)
 
+    # Build live URL so CEO can check visually
+    base_url = None
+    for pid, meta in PROJECT_REGISTRY.items():
+        if pid == (project_id or "BakudanWebsite_Sub"):
+            base_url = meta.get("url") or meta.get("github", "")
+            break
+    live_url = None
+    if base_url and base_url.startswith("http"):
+        live_url = f"{base_url.rstrip('/')}/blog-{slug}.html"
+
+    result["live_url"] = live_url
+
     return {"approved": True, "publish_result": result}
 
 
@@ -655,6 +688,652 @@ def _get_task_context(task: dict) -> dict:
         try: return _json.loads(ctx)
         except: return {}
     return ctx
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Content Automation API (Phase 1)
+#  Orchestrates: plan → generate → validate → approve → publish
+#  Brand: Raw Sushi Bar (raw)
+# ══════════════════════════════════════════════════════════════════════════════
+
+import logging as _ca_logging
+from datetime import datetime as _dt
+
+_ca_logger = _ca_logging.getLogger("content_automation.api")
+
+
+# ── Pydantic models ──────────────────────────────────────────────────────
+
+class PlanDailyRequest(BaseModel):
+    brand: str = "raw"
+    date: Optional[str] = None  # YYYY-MM-DD, defaults to today
+
+
+class GeneratePostRequest(BaseModel):
+    brand: str = "raw"
+    post_type: Optional[str] = None  # viral_attention | conversion_order | etc.
+    topic: Optional[str] = None        # override topic if provided
+
+
+class ValidatePostRequest(BaseModel):
+    post_id: str
+    version_id: Optional[str] = None
+
+
+class ApprovePostRequest(BaseModel):
+    post_id: str
+    reviewer: str
+    comment: Optional[str] = None
+    schedule_at: Optional[str] = None
+
+
+class RejectPostRequest(BaseModel):
+    post_id: str
+    reviewer: str
+    reason: str
+
+
+class RevisionRequest(BaseModel):
+    post_id: str
+    reviewer: str
+    feedback: str
+
+
+class PublishPostRequest(BaseModel):
+    post_id: str
+    author: str = "AgentAI Agency"
+
+
+# ── Daily planner ────────────────────────────────────────────────────────
+
+@app.post("/content/jobs/plan-daily")
+def plan_daily_content(body: PlanDailyRequest):
+    """
+    Create 3 content plans for today (or a specified date).
+
+    Slot 0 → viral_attention   (morning)
+    Slot 1 → conversion_order (midday)
+    Slot 2 → rotating type   (evening)
+
+    Returns the 3 ContentPlan objects. Does NOT generate drafts yet.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    try:
+        from src.unified.content.planner import ContentPlanner
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not import planner: {exc}")
+
+    try:
+        planner = ContentPlanner(brand=body.brand)
+        plans = planner.plan_day(date_iso=body.date)
+        return {
+            "planned": True,
+            "brand": body.brand,
+            "date": body.date or _dt.now().strftime("%Y-%m-%d"),
+            "plans": [p.model_dump(mode="json") for p in plans],
+            "slot_summary": {
+                p.slot: {"type": p.post_type.value, "title": p.title}
+                for p in plans
+            },
+        }
+    except Exception as exc:
+        _ca_logger.exception("plan-daily failed")
+        raise HTTPException(status_code=500, detail=f"Planning failed: {exc}")
+
+
+@app.get("/content/jobs/plan-daily")
+def get_today_plans(brand: str = "raw"):
+    """Return today's planned content slots without regenerating."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    try:
+        from src.unified.content.planner import ContentPlanner
+        from pathlib import Path
+        import json
+
+        planner = ContentPlanner(brand=brand)
+        hist_path = Path("data/content_automation_history.json")
+        if not hist_path.exists():
+            return {"plans": [], "message": "No plans found for today."}
+
+        data = json.loads(hist_path.read_text())
+        today = _dt.now().strftime("%Y-%m-%d")
+        today_plans = [
+            e for e in data
+            if e.get("brand") == brand
+            and e.get("date", "").startswith(today)
+        ]
+        return {"plans": today_plans, "count": len(today_plans)}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ── Generate ──────────────────────────────────────────────────────────────
+
+@app.post("/content/jobs/generate")
+def generate_content_job(body: GeneratePostRequest):
+    """
+    Run the full generate pipeline for one post:
+      plan → research → generate → validate → attach image → save to DB
+
+    Returns post_id, version_id, status, validation result.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    try:
+        from src.unified.content import (
+            ContentPlanner, ContentGenerator, ContentValidator,
+        )
+        from src.unified.content.service import ContentService as ApprovalService
+        from src.unified.content.models import PostType
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=f"Import error: {exc}")
+
+    try:
+        # Plan
+        planner = ContentPlanner(brand=body.brand)
+        plans = planner.plan_day()
+
+        # Select plan by slot or post_type
+        if body.post_type:
+            pt = PostType(body.post_type)
+            matching = [p for p in plans if p.post_type == pt]
+            plan = matching[0] if matching else plans[0]
+        else:
+            plan = plans[0]
+
+        # Override topic if provided
+        if body.topic:
+            plan.topic = body.topic
+            plan.title = body.topic[:70]
+
+        # Generate
+        generator = ContentGenerator(brand=body.brand)
+        draft = generator.generate(plan)
+
+        # Validate
+        validator = ContentValidator(brand=body.brand)
+        val_result = validator.validate(draft)
+
+        # Attach image
+        img_svc = ImageService(brand=body.brand)
+        img = img_svc.attach_image(draft.post_type, draft.title, draft.slug)
+        draft.image_asset_id = img.get("image_asset_id")
+        draft.image_url       = img.get("image_url")
+        draft.image_prompt    = img.get("image_prompt")
+
+        # Save to DB via ApprovalService
+        approval_svc = ApprovalService(brand=body.brand)
+        result = approval_svc.create_post_from_plan(
+            plan=plan,
+            draft=draft,
+            validation_passed=val_result.passed,
+        )
+
+        return {
+            "post_id": result["post_id"],
+            "version_id": result["version_id"],
+            "status": result["status"],
+            "agent_score": result["agent_score"],
+            "validation": {
+                "passed": val_result.passed,
+                "decision": val_result.publish_decision,
+                "quality_score": val_result.quality_score,
+                "hard_valid": val_result.hard_valid,
+                "issues": (
+                    val_result.hard_issues
+                    + val_result.quality_issues
+                    + val_result.policy_issues
+                ),
+                "editor_notes": val_result.editor_notes,
+            },
+            "image": img,
+            "draft": {
+                "title": draft.title,
+                "slug": draft.slug,
+                "post_type": draft.post_type,
+                "target_audience": draft.target_audience,
+            },
+        }
+    except Exception as exc:
+        _ca_logger.exception("generate_content_job failed")
+        raise HTTPException(status_code=500, detail=f"Generation failed: {exc}")
+
+
+# ── Validate ─────────────────────────────────────────────────────────────
+
+@app.post("/content/jobs/validate")
+def validate_content_job(body: ValidatePostRequest):
+    """
+    Re-run validation on an existing post/version.
+    Returns updated validation result.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    try:
+        from src.unified.content.validator import ContentValidator
+        from src.unified.content.models import ContentDraft
+        from db.post_repository import PostRepository
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    try:
+        repo = PostRepository()
+        detail = repo.get_post_detail(body.post_id)
+        if not detail:
+            raise HTTPException(status_code=404, detail="Post not found")
+
+        # Find requested version or use latest
+        versions = detail.get("versions", [])
+        if body.version_id:
+            version = next((v for v in versions if v["id"] == body.version_id), versions[-1])
+        else:
+            version = versions[-1] if versions else {}
+
+        draft = ContentDraft(
+            plan_id=body.post_id,
+            title=version.get("title", detail.get("title", "")),
+            slug=version.get("slug", detail.get("slug", "")) or "",
+            meta_description=version.get("seo_description", detail.get("seo_description", "")),
+            excerpt=version.get("excerpt", detail.get("excerpt", "")),
+            body_markdown=version.get("body_markdown", detail.get("body_markdown", "")),
+            cta_text=version.get("cta_text", detail.get("cta_text", "")),
+            cta_url=version.get("cta_url", detail.get("cta_url", "")),
+            seo_title=version.get("seo_title", detail.get("seo_title", "")),
+            focus_keyword=version.get("focus_keyword", detail.get("focus_keyword", "")),
+            post_type=detail.get("post_type", "blog"),
+            target_audience=detail.get("target_audience", ""),
+        )
+
+        validator = ContentValidator(brand="raw")
+        result = validator.validate(draft)
+
+        # Update version review_notes
+        if versions:
+            latest_v = versions[-1]
+            repo.update_version_review_status(
+                latest_v["id"],
+                review_status=result.publish_decision,
+                notes=result.editor_notes,
+            )
+
+        return {
+            "post_id": body.post_id,
+            "version_id": version.get("id"),
+            "validation": result.model_dump(mode="json"),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Validation failed: {exc}")
+
+
+# ── Posts CRUD ───────────────────────────────────────────────────────────
+
+@app.get("/content/posts")
+def list_content_posts(
+    status: Optional[str] = None,
+    post_type: Optional[str] = None,
+    brand: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """
+    List content posts with optional filters.
+    Default: all rawwebsite posts, sorted by updated_at DESC.
+    """
+    try:
+        from db.post_repository import PostRepository
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    repo = PostRepository()
+    posts = repo.list_review_queue(
+        status=status,
+        channel="rawwebsite",
+        brand=brand,
+        post_type=post_type,
+        keyword=q,
+        limit=limit,
+        offset=offset,
+    )
+    return {"posts": posts, "count": len(posts), "limit": limit, "offset": offset}
+
+
+@app.get("/content/posts/{post_id}")
+def get_content_post(post_id: str):
+    """Return full post detail: post + all versions + review timeline."""
+    try:
+        from db.post_repository import PostRepository
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    repo = PostRepository()
+    detail = repo.get_post_detail(post_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail=f"Post {post_id!r} not found")
+    return detail
+
+
+@app.get("/content/posts/{post_id}/versions")
+def get_post_versions(post_id: str):
+    """Return all versions for a post."""
+    try:
+        from db.post_repository import PostRepository
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    repo = PostRepository()
+    detail = repo.get_post_detail(post_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail=f"Post {post_id!r} not found")
+    return {"versions": detail.get("versions", []), "count": len(detail.get("versions", []))}
+
+
+@app.get("/content/posts/{post_id}/logs")
+def get_post_audit_logs(post_id: str):
+    """Return the full audit trail for a post."""
+    try:
+        from db.post_repository import PostRepository
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    repo = PostRepository()
+    if not repo.get_post(post_id):
+        raise HTTPException(status_code=404, detail=f"Post {post_id!r} not found")
+    return {"logs": repo.get_post_logs(post_id)}
+
+
+# ── Approval actions ────────────────────────────────────────────────────
+
+@app.post("/content/posts/{post_id}/approve")
+def approve_content_post(post_id: str, body: ApprovePostRequest):
+    """
+    Approve a post (human review gate).
+    Transitions: pending_approval → approved (or → scheduled if schedule_at provided).
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    try:
+        from src.unified.content.service import ContentService as ApprovalService
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    try:
+        svc = ApprovalService(brand="raw")
+        result = svc.approve(
+            post_id=post_id,
+            reviewer=body.reviewer,
+            comment=body.comment or "",
+            schedule_at=body.schedule_at,
+        )
+        return {
+            "post_id": post_id,
+            "status": result.get("status"),
+            "approved_by": body.reviewer,
+            "scheduled_for": result.get("scheduled_for"),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Approval failed: {exc}")
+
+
+@app.post("/content/posts/{post_id}/reject")
+def reject_content_post(post_id: str, body: RejectPostRequest):
+    """
+    Reject a post.
+    Transitions: pending_approval → rejected.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    try:
+        from src.unified.content.service import ContentService as ApprovalService
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    try:
+        svc = ApprovalService(brand="raw")
+        result = svc.reject(post_id=post_id, reviewer=body.reviewer, reason=body.reason)
+        return {"post_id": post_id, "status": result.get("status"), "reason": body.reason}
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Rejection failed: {exc}")
+
+
+@app.post("/content/posts/{post_id}/request-revision")
+def request_content_revision(post_id: str, body: RevisionRequest):
+    """
+    Request revision on a post.
+    Transitions: pending_approval → revision_requested.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    try:
+        from src.unified.content.service import ContentService as ApprovalService
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    try:
+        svc = ApprovalService(brand="raw")
+        result = svc.request_revision(
+            post_id=post_id, reviewer=body.reviewer, feedback=body.feedback
+        )
+        return {
+            "post_id": post_id,
+            "status": result.get("status"),
+            "feedback": body.feedback,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Revision request failed: {exc}")
+
+
+# ── Publish ──────────────────────────────────────────────────────────────
+
+@app.post("/content/posts/{post_id}/publish")
+def publish_content_post(post_id: str, body: PublishPostRequest):
+    """
+    Publish an approved post to RawWebsite.
+
+    Requires post status: 'approved' or 'scheduled'.
+    Transitions: approved/scheduled → publishing → published (or publish_failed on error).
+    All publish attempts logged to publish_logs table.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    try:
+        from src.unified.content.service import ContentService as ApprovalService, ContentPublisher
+        from db.post_repository import PostRepository
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    repo = PostRepository()
+    post = repo.get_post(post_id)
+    if not post:
+        raise HTTPException(status_code=404, detail=f"Post {post_id!r} not found")
+
+    if post.get("status") not in ("approved", "scheduled", "published"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Post is in status {post.get('status')!r}. "
+                "Must be 'approved' or 'scheduled' to publish."
+            ),
+        )
+
+    # Transition to publishing
+    try:
+        approval_svc = ApprovalService(brand="raw")
+        approval_svc.begin_publish(post_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    # Fetch latest version
+    detail = repo.get_post_detail(post_id)
+    versions = detail.get("versions", [])
+    version = versions[-1] if versions else None
+
+    # Publish
+    try:
+        publisher = ContentPublisher()
+        pub_result = publisher.publish(post, version, author=body.author)
+    except Exception as exc:
+        _ca_logger.exception("Publish failed for post %s", post_id)
+        # Mark as failed
+        repo.update_post_status(post_id, "publish_failed")
+        repo.add_audit_entry(
+            actor="system",
+            action_type="post_publish_failed",
+            entity_id=post_id,
+            details={"error": str(exc)},
+        )
+        raise HTTPException(status_code=500, detail=f"Publish failed: {exc}")
+
+    # Mark as published
+    from datetime import datetime as _dt2
+    now = _dt2.now(timezone.utc).isoformat()
+    repo.update_post_status(post_id, "published", extra={"published_at": now})
+    repo.add_review_action({
+        "post_id": post_id,
+        "post_version_id": version.get("id") if version else None,
+        "actor": "system",
+        "actor_type": "system",
+        "action_type": "publish",
+        "from_status": "publishing",
+        "to_status": "published",
+        "comment": f"Published via {pub_result.get('mode', 'content_automation')}",
+        "payload": pub_result,
+    })
+
+    return {
+        "post_id": post_id,
+        "status": "published",
+        "result": pub_result,
+    }
+
+
+# ── Trends (Phase 1: placeholder) ─────────────────────────────────────────
+
+@app.get("/content/trends")
+def get_trends(brand: str = "raw", geography: str = "local", category: str = "food"):
+    """
+    Return current trend signals (Phase 1: always empty).
+
+    Phase 2 will return scored TrendSignal objects.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    try:
+        from src.unified.content.trend_engine import TrendEngine
+        engine = TrendEngine(brand=brand)
+        signals = engine.get_trends(geography=geography, category=category)
+        return {
+            "trends": [s.model_dump(mode="json") for s in signals],
+            "count": len(signals),
+            "phase": "phase1_placeholder",
+            "message": "Live trend engine is a Phase 2 feature.",
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/content/trends/refresh")
+def refresh_trends(brand: str = "raw"):
+    """Trigger a manual trend refresh (Phase 1: no-op)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    try:
+        from src.unified.content.trend_engine import TrendEngine
+        engine = TrendEngine(brand=brand)
+        result = engine.refresh_trends()
+        return result
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ── Content automation status ────────────────────────────────────────────
+
+@app.get("/content/automation/status")
+def content_automation_status(brand: str = "raw"):
+    """
+    Return the content automation pipeline status for today:
+      - pending review count
+      - approved count
+      - published today count
+      - recent errors
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    try:
+        from src.unified.content.service import ContentService as ApprovalService
+        svc = ApprovalService(brand=brand)
+        stats = svc.get_queue_stats()
+        return {"brand": brand, "date": _dt.now().strftime("%Y-%m-%d"), **stats}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/content/automation/run-daily")
+def run_daily_pipeline(brand: str = "raw"):
+    """
+    Run the complete daily pipeline using ContentService:
+      plan all 3 slots → generate all 3 → validate all 3 → add to approval queue
+
+    Uses src/unified/content/service.py (ContentService) per spec.
+    Returns summary of all 3 posts.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    try:
+        from src.unified.content.service import ContentService
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    results = []
+    errors: list[str] = []
+
+    try:
+        planner   = ContentPlanner(brand=brand)
+        generator = ContentGenerator(brand=brand)
+        validator = ContentValidator(brand=brand)
+        img_svc   = ImageService(brand=brand)
+        approval_svc = ApprovalService(brand=brand)
+        plans     = planner.plan_day()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Planning failed: {exc}")
+
+    for plan in plans:
+        try:
+            draft = generator.generate(plan)
+            val   = validator.validate(draft)
+
+            img = img_svc.attach_image(draft.post_type, draft.title, draft.slug)
+            draft.image_asset_id = img.get("image_asset_id")
+            draft.image_url      = img.get("image_url")
+            draft.image_prompt   = img.get("image_prompt")
+
+            db_result = approval_svc.create_post_from_plan(plan, draft, val.passed)
+            results.append({
+                "slot": plan.slot,
+                "post_type": plan.post_type.value,
+                "title": draft.title,
+                "post_id": db_result["post_id"],
+                "status": db_result["status"],
+                "validation_decision": val.publish_decision,
+                "quality_score": val.quality_score,
+                "image_tag": img.get("image_tag"),
+            })
+        except Exception as exc:
+            _ca_logger.warning("Slot %d failed: %s", plan.slot, exc)
+            errors.append(f"Slot {plan.slot}: {exc}")
+            results.append({
+                "slot": plan.slot,
+                "post_type": plan.post_type.value,
+                "error": str(exc),
+                "status": "failed",
+            })
+
+    return {
+        "brand": brand,
+        "date": _dt.now().strftime("%Y-%m-%d"),
+        "slots_attempted": len(plans),
+        "slots_completed": sum(1 for r in results if r.get("status") != "failed"),
+        "results": results,
+        "errors": errors,
+    }
 
 
 # ── Agents ────────────────────────────────────────────────────────────
@@ -2049,3 +2728,189 @@ def get_store(store_id: str):
     if not store:
         raise HTTPException(404, "Store not found")
     return {"id": store_id, **store}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Project Manifests + Workspace Execution
+# ══════════════════════════════════════════════════════════════════════════════
+
+class ManifestUpdate(BaseModel):
+    commands: dict[str, str] | None = None
+    deploy_command: str | None = None
+    verification_type: str | None = None
+    verification_config: dict | None = None
+    requires_approval_for: list[str] | None = None
+    conventions: str | None = None
+    known_issues: list[str] | None = None
+
+
+@app.get("/projects/{project_id}/manifest")
+def get_project_manifest(project_id: str):
+    """Return the merged manifest for a project (disk overrides + defaults)."""
+    from apps.api.project_manifests import get_manifest
+    manifest = get_manifest(project_id)
+    if not manifest:
+        raise HTTPException(404, "Project not found")
+    return manifest.to_dict()
+
+
+@app.put("/projects/{project_id}/manifest")
+def update_project_manifest(project_id: str, body: ManifestUpdate):
+    """Update a project's on-disk manifest (.agentai/manifest.yaml)."""
+    from apps.api.project_manifests import get_manifest
+    manifest = get_manifest(project_id)
+    if not manifest:
+        raise HTTPException(404, "Project not found")
+
+    project_path = manifest.path()
+    agentai_dir = project_path / ".agentai"
+    agentai_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = agentai_dir / "manifest.yaml"
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+
+    if updates:
+        try:
+            import yaml
+            existing = {}
+            if manifest_path.exists():
+                existing = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+            merged = {**existing, **updates}
+            manifest_path.write_text(yaml.dump(merged), encoding="utf-8")
+        except ImportError:
+            # yaml not installed — write raw JSON fallback
+            import json
+            existing = {}
+            if manifest_path.exists():
+                existing = json.loads(manifest_path.read_text(encoding="utf-8")) or {}
+            merged = {**existing, **updates}
+            manifest_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+
+    return {"status": "saved", "path": str(manifest_path), "updates": list(updates.keys())}
+
+
+@app.get("/projects/{project_id}/commands")
+def get_project_commands(project_id: str):
+    """Return all available build/test/run commands for a project."""
+    from apps.api.project_manifests import get_available_commands
+
+    meta = PROJECT_REGISTRY.get(project_id)
+    if not meta:
+        raise HTTPException(404, "Project not found")
+
+    commands = get_available_commands(project_id)
+    project_path = _resolve_project_path(project_id, meta)
+    git = _git_info(project_path)
+
+    # Auto-detect missing commands from stack
+    if project_path.exists():
+        if (project_path / "package.json").exists() and "dev" not in commands:
+            commands["dev"] = "npm run dev"
+            commands["build"] = commands.get("build") or "npm run build"
+            commands["test"] = commands.get("test") or "npm test"
+        if (project_path / "requirements.txt").exists() and "test" not in commands:
+            commands["test"] = "pytest --tb=short -q"
+
+    return {
+        "project_id": project_id,
+        "commands": commands,
+        "branch": git.get("branch"),
+        "last_commit": git.get("last_commit"),
+    }
+
+
+class WorkspaceCommandRequest(BaseModel):
+    command: str
+    timeout: int = 120
+    capture_artifacts: list[str] | None = None
+
+
+@app.post("/projects/{project_id}/workspace/command")
+async def run_workspace_command(project_id: str, body: WorkspaceCommandRequest):
+    """Execute a command in the project workspace."""
+    from apps.api.workspace_executor import execute_in_workspace
+
+    meta = PROJECT_REGISTRY.get(project_id)
+    if not meta:
+        raise HTTPException(404, "Project not found")
+
+    result = await execute_in_workspace(
+        project_id=project_id,
+        command=body.command,
+        timeout=body.timeout,
+        capture_artifacts_patterns=body.capture_artifacts or [],
+    )
+    return result.to_dict()
+
+
+@app.post("/projects/{project_id}/workspace/tests")
+async def run_project_tests(project_id: str):
+    """Run the project's declared test command."""
+    from apps.api.workspace_executor import run_tests
+    result = await run_tests(project_id)
+    return result.to_dict()
+
+
+@app.get("/projects/{project_id}/workspace/context")
+def get_workspace_context(project_id: str):
+    """Get the workspace context map for a project (git state, env, conventions)."""
+    from apps.api.workspace_executor import build_workspace_context
+    context = build_workspace_context(project_id)
+    return {"project_id": project_id, "context": context.to_prompt_context(), "raw": context.to_prompt_context()}
+
+
+@app.post("/projects/{project_id}/workspace/deploy")
+async def run_project_deploy(project_id: str, dry_run: bool = True):
+    """Run the project's declared deploy command."""
+    from apps.api.workspace_executor import run_deploy
+    result = await run_deploy(project_id, dry_run=dry_run)
+    return result.to_dict()
+
+
+@app.post("/projects/{project_id}/workspace/branch")
+def create_project_branch(project_id: str, branch_name: str, base: str = "HEAD"):
+    """Create a new branch in the project repository."""
+    from apps.api.project_manifests import get_manifest
+    from apps.api.workspace_executor import git_run
+
+    manifest = get_manifest(project_id)
+    if not manifest:
+        raise HTTPException(404, "Manifest not found")
+
+    project_path = manifest.path()
+    if not project_path.exists():
+        raise HTTPException(404, "Project path not found on disk")
+
+    rc, out, err = git_run(project_path, "checkout", "-b", branch_name)
+    if rc != 0:
+        raise HTTPException(400, f"Could not create branch: {err}")
+
+    return {"status": "done", "branch": branch_name, "message": out}
+
+
+@app.get("/projects/{project_id}/workspace/diff")
+def get_workspace_diff(project_id: str, base: str = "HEAD", target: str = "--"):
+    """Get the git diff for a project."""
+    from apps.api.project_manifests import get_manifest
+    from apps.api.workspace_executor import get_git_diff
+
+    manifest = get_manifest(project_id)
+    if not manifest:
+        raise HTTPException(404, "Manifest not found")
+
+    diff = get_git_diff(manifest.path(), base=base, target=target)
+    return {"project_id": project_id, "base": base, "target": target, "diff": diff}
+
+
+@app.get("/projects/{project_id}/workspace/sha")
+def get_workspace_sha(project_id: str):
+    """Get the current git SHA (for rollback tracking)."""
+    from apps.api.project_manifests import get_manifest
+    from apps.api.workspace_executor import get_git_sha
+
+    manifest = get_manifest(project_id)
+    if not manifest:
+        raise HTTPException(404, "Manifest not found")
+
+    sha = get_git_sha(manifest.path())
+    return {"project_id": project_id, "sha": sha, "short": sha[:8] if sha else ""}
