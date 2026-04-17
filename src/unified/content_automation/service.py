@@ -183,11 +183,11 @@ class ContentAutomationService:
             PublishResult dict with success flag, url, and details.
         """
         from .approval_service import ApprovalService
-        from .publisher import ContentPublisher
+        from src.unified.content.publisher import ContentPublisher as MarkdownPublisher
         from db.post_repository import PostRepository
 
         approval  = ApprovalService(brand=self.brand)
-        publisher = ContentPublisher()
+        publisher = MarkdownPublisher()
         repo      = PostRepository()
 
         # Transition to publishing
@@ -202,8 +202,15 @@ class ContentAutomationService:
         versions = detail.get("versions") or []
         version  = versions[-1] if versions else None
 
+        # Merge post + version into a single dict for the publisher
+        merged = {**post}
+        if version:
+            merged.update({k: v for k, v in version.items() if v})
+
         try:
-            result = publisher.publish(post, version, author=reviewer)
+            result = publisher.publish(
+                merged, post_id=post_id, author=reviewer
+            )
             published_ok = result.get("success", False)
         except Exception as exc:
             logger.error("Publish failed for post %s: %s", post_id, exc)
