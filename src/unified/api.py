@@ -658,6 +658,12 @@ ACTION_REGISTRY: dict[str, dict] = {
         "integration.export": {"requires_file": False},
         "integration.sync_store": {"requires_file": False},
         "integration.retry_errors": {"requires_file": False},
+        # Toast Report Ingestion
+        "integration.ingest_file": {"requires_file": True},
+        "integration.ingest_folder": {"requires_file": False},
+        "integration.gdrive_poll": {"requires_file": False},
+        "integration.coverage": {"requires_file": False},
+        "integration.upload_status": {"requires_file": False},
     },
     "agentai-agency": {
         "agency.refresh": {"requires_file": False},
