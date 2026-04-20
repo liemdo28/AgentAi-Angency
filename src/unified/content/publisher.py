@@ -108,7 +108,10 @@ class ContentPublisher:
         self.token        = os.environ.get("GIT_TOKEN", "")
         self.repo_path    = os.environ.get("RAWWEBSITE_REPO_PATH")
         self.export_dir   = Path(os.environ.get("POST_EXPORT_DIR", "data/post_exports"))
-        self.target_dir   = "content/posts"
+        # Primary target: Astro content collection (read by blog/[slug].astro)
+        self.target_dir   = "src/content/blog"
+        # Legacy manifest target (for content/index.json reference)
+        self.manifest_dir = "content/posts"
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -183,15 +186,82 @@ class ContentPublisher:
 
     # ── Markdown building ─────────────────────────────────────────────────────
 
+    # Map automation post_type → human-readable blog category label + colour
+    _POST_TYPE_CATEGORY = {
+        "conversion_order":   ("Dining Guide",      "#C41E3A"),
+        "conversion_visit":   ("Visit Guide",       "#1a1a1a"),
+        "conversion_catering":("Catering",          "#d4af37"),
+        "informational":      ("Japanese Cuisine",  "#2b6cb0"),
+        "local_seo":          ("Local Guide",       "#2d6a4f"),
+        "event":              ("Events",            "#6b46c1"),
+        "blog":               ("Sushi Blog",        "#1a1a1a"),
+    }
+
+    @staticmethod
+    def _estimate_read_time(body: str) -> str:
+        words = len(body.split())
+        minutes = max(1, round(words / 200))
+        return f"{minutes} min read"
+
     def _build_markdown(self, d: dict) -> str:
         """
-        Build a markdown file with YAML frontmatter from a normalised dict.
+        Build a markdown file with Astro-compatible YAML frontmatter.
 
         Handles field names from both content/ and content_automation/ models.
+        The schema matches what src/pages/blog/[slug].astro expects:
+          title, description, author, datePublished, readTime,
+          category, categoryColor, image, ctaText, ctaUrl
         """
+        title       = _field(d, "title",             default="Untitled")
+        date_str    = _field(d, "published_at", "created_at", "date",
+                             default=self._now())[:10]
+        description = _field(d, "meta_description", "seo_description",
+                             "excerpt", default="")[:160]
+        image       = _field(d, "image_url", "featured_image_url", "image",
+                             default="")
+        cta_text    = _field(d, "cta", "cta_text",  default="")
+        cta_url     = _field(d, "cta_url", default="https://order.toasttab.com/online/raw-sushi-bistro-10742-trinity-parkway-suite-d")
+        post_type   = _field(d, "type", "post_type", default="blog")
+        body        = _field(d, "body_markdown",     default="")
+
+        # Normalise enum values
+        if hasattr(post_type, "value"):
+            post_type = post_type.value
+
+        category, category_color = self._POST_TYPE_CATEGORY.get(
+            str(post_type), ("Sushi Blog", "#1a1a1a")
+        )
+        read_time = self._estimate_read_time(body)
+
+        # Ensure CTA URL is absolute www domain
+        if cta_url and not cta_url.startswith("http"):
+            cta_url = "https://www.rawsushibar.com" + cta_url
+
+        lines = [
+            "---",
+            f'title: "{_yaml_escape(title)}"',
+            f'description: "{_yaml_escape(description)}"',
+            f'author: "Raw Sushi Bar"',
+            f"datePublished: \"{date_str}\"",
+            f'readTime: "{read_time}"',
+            f'category: "{category}"',
+            f'categoryColor: "{category_color}"',
+            f"image: {image or '\"\"'}",
+            f'ctaText: "{_yaml_escape(cta_text)}"',
+            f"ctaUrl: \"{cta_url}\"",
+            "---",
+            "",
+            body,
+        ]
+
+        return "\n".join(lines)
+
+    def _build_raw_markdown(self, d: dict) -> str:
+        """Build the original automation-format markdown (kept in content/posts/)."""
         title        = _field(d, "title",             default="Untitled")
         slug         = self._slug(d)
-        date_str     = _field(d, "published_at", "created_at", default=self._now())[:10]
+        date_str     = _field(d, "published_at", "created_at", "date",
+                               default=self._now())[:10]
         excerpt      = _field(d, "excerpt",           default="")[:300]
         meta_desc    = _field(d, "meta_description", "seo_description", default="")[:160]
         image        = _field(d, "image_url", "featured_image_url", "image", default="")
@@ -200,13 +270,11 @@ class ContentPublisher:
         primary_kw   = _field(d, "keyword_primary", "focus_keyword", "primary_keyword", default="")
         secondary_kw = _field_list(d, "keywords_secondary", "secondary_keywords")
         post_type    = _field(d, "type", "post_type", default="blog")
-        # Normalise enum values
         if hasattr(post_type, "value"):
             post_type = post_type.value
         audience     = _field(d, "target_audience",   default="")
         body         = _field(d, "body_markdown",      default="")
-
-        kw_list = ", ".join(secondary_kw) if secondary_kw else ""
+        kw_list      = ", ".join(secondary_kw) if secondary_kw else ""
 
         lines = [
             "---",
@@ -227,7 +295,6 @@ class ContentPublisher:
             "",
             body,
         ]
-
         return "\n".join(lines)
 
     # ── Git publish ───────────────────────────────────────────────────────────
@@ -235,13 +302,22 @@ class ContentPublisher:
     def _git_publish(self, slug: str, md_content: str, post_id: str, d: dict) -> dict:
         """Write .md file + update index.json + update sitemap.xml → git commit + push."""
         work_dir = self._prepare_repo()
-        posts_dir = work_dir / self.target_dir
-        posts_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write markdown
-        md_path = posts_dir / f"{slug}.md"
+        # Primary: write to Astro content collection
+        astro_posts_dir = work_dir / self.target_dir
+        astro_posts_dir.mkdir(parents=True, exist_ok=True)
+        md_path = astro_posts_dir / f"{slug}.md"
         md_path.write_text(md_content, encoding="utf-8")
-        logger.info("Wrote %s (%d bytes)", md_path, len(md_content))
+        logger.info("Wrote Astro post %s (%d bytes)", md_path, len(md_content))
+
+        # Secondary: write raw automation post to content/posts/ for manifest
+        manifest_posts_dir = work_dir / self.manifest_dir
+        manifest_posts_dir.mkdir(parents=True, exist_ok=True)
+        # Build the raw automation-format copy for content/posts/
+        raw_md = self._build_raw_markdown(d)
+        raw_md_path = manifest_posts_dir / f"{slug}.md"
+        raw_md_path.write_text(raw_md, encoding="utf-8")
+        logger.info("Wrote manifest post %s", raw_md_path)
 
         # Update blog index manifest
         self._update_index_json(work_dir, slug, d)
@@ -250,11 +326,13 @@ class ContentPublisher:
         self._update_sitemap(work_dir, slug, d)
 
         # Git add → commit → push
-        rel_md   = f"{self.target_dir}/{slug}.md"
-        self._git(work_dir, "add", rel_md)
+        rel_md      = f"{self.target_dir}/{slug}.md"
+        rel_raw_md  = f"{self.manifest_dir}/{slug}.md"
+        self._git(work_dir, "add", rel_md, rel_raw_md)
         self._git_add_commit_push(work_dir, slug)
 
-        url = f"https://www.rawsushibar.com/blog-posts.html?slug={slug}"
+        # New blog URL is the Astro route
+        url = f"https://www.rawsushibar.com/blog/{slug}/"
         return {
             "success":      True,
             "mode":         "git_commit",
